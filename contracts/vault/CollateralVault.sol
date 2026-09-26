@@ -25,6 +25,13 @@ import {AssetQualityRegistry} from "../risk/AssetQualityRegistry.sol";
  *      - Guardian/keeper actions use scoped AccessControl roles (no owner god-mode).
  *      - Every state change emits an event.
  *
+ *      LIQUIDATION is permissionless and partial: any outside agent reads {quoteLiquidation},
+ *      calls liquidate(user, repayAmount) to flag (phase 1) and, after GRACE_PERIOD, to repay a
+ *      slice for collateral worth slice * (1 + liqPenaltyBps). The slice is capped at what the
+ *      collateral can back at that bonus, so a liquidator never covers bad debt; the debt left
+ *      on a fully-seized position is written off against the protocol {reserve}. Agents should
+ *      call {refreshFlag} each tick after a price recovery so stale flags are cleared.
+ *
  *      Isolation simplification: each user has exactly ONE collateral asset at a time. This
  *      keeps health-factor accounting and the isolation rules trivial for the demo.
  *
@@ -52,6 +59,15 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
     /// @notice mUSDC available to lend. Funded via {fundPool}; grows on repay, shrinks on borrow.
     uint256 public poolLiquidity;
 
+    /// @notice Protocol reserve (mUSDC, 6dp) held by the vault, separate from {poolLiquidity}.
+    ///         Funded by anyone via {fundReserve}. Used to write off the debt that remains on a
+    ///         position once liquidation has taken all of its collateral (underwater remainder),
+    ///         so liquidators are never asked to cover bad debt.
+    uint256 public reserve;
+
+    /// @notice Cumulative debt (mUSDC, 6dp) written off that the reserve could not cover.
+    uint256 public badDebt;
+
     // ---- user accounting ----
     mapping(address => address) public collateralAsset;                    // user => single asset
     mapping(address => mapping(address => uint256)) public collateral;     // user => asset => amt
@@ -75,6 +91,12 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
         uint256 penaltyBps
     );
     event PoolFunded(address indexed from, uint256 amount);
+    event ReserveFunded(address indexed from, uint256 amount);
+    /// @notice Remaining debt of a fully-seized position was written off. `coveredByReserve` of
+    ///         it was paid from the reserve into the pool; the rest (if any) is bad debt.
+    event DebtWrittenOff(address indexed user, address indexed asset, uint256 amount, uint256 coveredByReserve);
+    /// @notice The reserve was short: `amount` of written-off debt is unbacked (lenders absorb it).
+    event BadDebtRecorded(address indexed user, address indexed asset, uint256 amount);
 
     constructor(
         address _riskEngine,
@@ -104,6 +126,14 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
         emit PoolFunded(msg.sender, amount);
     }
 
+    /// @notice Supply mUSDC to the protocol reserve (the bad-debt backstop). Anyone may fund.
+    function fundReserve(uint256 amount) external nonReentrant {
+        require(amount > 0, "zero amount");
+        borrowToken.safeTransferFrom(msg.sender, address(this), amount);
+        reserve += amount;
+        emit ReserveFunded(msg.sender, amount);
+    }
+
     // ---------------------------------------------------------------------
     // Collateral
     // ---------------------------------------------------------------------
@@ -127,6 +157,9 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
         collateral[msg.sender][asset] += amount;
 
         emit Deposit(msg.sender, asset, amount);
+
+        // Topping up collateral can cure a flagged position: drop the stale flag.
+        _clearFlagIfHealthy(msg.sender, asset);
     }
 
     /**
@@ -214,34 +247,87 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
         totalDebtByAsset[asset] -= pay;
         poolLiquidity += pay;
 
-        // Clear the soft-liquidation flag once the position is healthy again.
-        if (debt[user] == 0) {
-            _clearFlag(user, asset);
-        } else if (!oracle.isCircuitBroken(asset) && riskEngine.getHealthFactor(user) >= WAD) {
-            _clearFlag(user, asset);
-        }
-
         emit Repay(payer, user, pay);
+
+        // Clear the soft-liquidation flag once the position is healthy again.
+        _clearFlagIfHealthy(user, asset);
     }
 
     // ---------------------------------------------------------------------
-    // Liquidation (soft, grace-period)
+    // Liquidation (soft, grace-period, partial, permissionless)
     // ---------------------------------------------------------------------
 
     /**
-     * @notice Soft-liquidate `user`. Two-phase:
-     *         Phase 1 (flag): the first time a user is found liquidatable, stamp
-     *                         `unhealthySince[user] = now` and return without seizing. This
-     *                         gives the borrower / the risk-monitor agent a GRACE_PERIOD to cure.
-     *         Phase 2 (seize): after GRACE_PERIOD, if STILL liquidatable, the liquidator repays
-     *                          the debt and seizes collateral plus the liquidation penalty.
-     *
-     * @dev NO LIQUIDATION ON A BROKEN PRICE: if the collateral breaker is tripped, revert. A
-     *      manipulated -40% print must never seize a healthy user — the breaker freezes the price
-     *      at last-good and this guard blocks seizure entirely until a guardian clears it.
-     *      If the user has become healthy again, any stale flag is cleared and the call reverts.
+     * @notice One-call quote for an outside liquidator (no role needed to liquidate).
+     * @return liquidatable      true if HF < 1 on a readable, non-frozen price.
+     * @return graceSecondsLeft  seconds until seizure (phase 2) is allowed. Equals GRACE_PERIOD
+     *                           while the position is liquidatable but not yet flagged (the next
+     *                           liquidate() call starts the clock). Seizure is possible right now
+     *                           iff `liquidatable && graceSecondsLeft == 0`.
+     * @return maxRepay          largest slice (mUSDC, 6dp) liquidate() will take right now:
+     *                           min(debt, collateralValue / (1 + bonus)). 0 if not liquidatable.
+     * @return collateralOut     collateral base units the liquidator receives for `maxRepay`
+     *                           (worth maxRepay * (1 + bonus) at the oracle price).
+     * @return bonusBps          liquidation bonus in bps (the asset's liqPenaltyBps).
      */
-    function liquidate(address user) external nonReentrant {
+    function quoteLiquidation(address user)
+        external
+        view
+        returns (
+            bool liquidatable,
+            uint256 graceSecondsLeft,
+            uint256 maxRepay,
+            uint256 collateralOut,
+            uint256 bonusBps
+        )
+    {
+        address asset = collateralAsset[user];
+        if (asset == address(0)) return (false, 0, 0, 0, 0);
+        bonusBps = registry.getConfig(asset).liqPenaltyBps;
+        if (debt[user] == 0 || oracle.isCircuitBroken(asset)) return (false, 0, 0, 0, bonusBps);
+
+        uint256 price;
+        try oracle.getPrice(asset) returns (uint256 p, uint256) {
+            price = p;
+        } catch {
+            return (false, 0, 0, 0, bonusBps); // stale / unreadable price: nothing to act on
+        }
+        if (!riskEngine.isLiquidatable(user)) return (false, 0, 0, 0, bonusBps);
+
+        liquidatable = true;
+        uint256 since = unhealthySince[user];
+        if (since == 0) {
+            graceSecondsLeft = GRACE_PERIOD;
+        } else if (block.timestamp < since + GRACE_PERIOD) {
+            graceSecondsLeft = since + GRACE_PERIOD - block.timestamp;
+        }
+        (maxRepay, collateralOut) = _liquidationSlice(user, asset, price, type(uint256).max, bonusBps);
+    }
+
+    /**
+     * @notice Soft, partial liquidation of `user`. Permissionless: any address may call.
+     *         Phase 1 (flag): the first call on a liquidatable user stamps
+     *                         `unhealthySince[user] = now` and returns without seizing. This
+     *                         gives the borrower / the risk-monitor agent a GRACE_PERIOD to cure.
+     *         Phase 2 (seize): after GRACE_PERIOD, if STILL liquidatable, the caller repays a
+     *                          slice of the debt and receives collateral worth
+     *                          slice * (1 + liqPenaltyBps) at the oracle price.
+     *
+     * @param repayAmount Requested slice (mUSDC, 6dp). It is capped to
+     *        min(debt, collateralValue / (1 + bonus)) so the liquidator is never asked to cover
+     *        bad debt and every slice stays profitable. Pass type(uint256).max for "as much as
+     *        possible"; use {quoteLiquidation} to learn the exact cap first.
+     *
+     * @dev NO LIQUIDATION ON A BROKEN PRICE: if the collateral breaker is tripped, revert with
+     *      "cannot liquidate on frozen price". A manipulated print must never seize a healthy user.
+     *      If the user is healthy again (HF >= 1) and still carries a stale flag, the flag is
+     *      cleared and the call RETURNS (so the clear persists); with no flag it reverts
+     *      "not liquidatable".
+     *      If the slice takes the last of the collateral while debt remains (underwater
+     *      remainder), that debt is written off against the reserve (see {_writeOff}).
+     */
+    function liquidate(address user, uint256 repayAmount) external nonReentrant {
+        require(repayAmount > 0, "zero amount");
         address asset = collateralAsset[user];
         require(asset != address(0), "no position");
 
@@ -249,9 +335,10 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
         require(!oracle.isCircuitBroken(asset), "cannot liquidate on frozen price");
 
         if (!riskEngine.isLiquidatable(user)) {
-            // Recovered: drop any stale flag and stop.
+            // Recovered: drop the stale flag and return (a revert would roll the clear back).
+            require(unhealthySince[user] != 0, "not liquidatable");
             _clearFlag(user, asset);
-            revert("not liquidatable");
+            return;
         }
 
         // Phase 1: begin the grace window.
@@ -264,35 +351,120 @@ contract CollateralVault is ReentrancyGuard, Pausable, AccessControl {
         // Phase 2: grace must have elapsed.
         require(block.timestamp >= unhealthySince[user] + GRACE_PERIOD, "grace period active");
 
-        AssetQualityRegistry.AssetConfig memory cfg = registry.getConfig(asset);
+        uint256 bonusBps = registry.getConfig(asset).liqPenaltyBps;
         (uint256 price, ) = oracle.getPrice(asset); // safe: breaker checked above
-        uint8 dec = IERC20Metadata(asset).decimals();
+        (uint256 slice, uint256 seize) = _liquidationSlice(user, asset, price, repayAmount, bonusBps);
 
-        uint256 d = debt[user];
+        // Effects: the slice repays debt into the pool; the user loses the seized collateral.
+        debt[user] -= slice;
+        totalDebtByAsset[asset] -= slice;
+        poolLiquidity += slice;
+        uint256 colLeft = collateral[user][asset] - seize;
+        collateral[user][asset] = colLeft;
 
-        // Collateral to seize = debtValue * (1 + penalty) / price, in collateral base units.
-        uint256 debtValue1e8 = (d * PRICE_SCALE) / (10 ** borrowDecimals);
-        uint256 seizeValue1e8 = (debtValue1e8 * (BPS + cfg.liqPenaltyBps)) / BPS;
-        uint256 seizeAmount = (seizeValue1e8 * (10 ** dec)) / price;
-
-        uint256 userCol = collateral[user][asset];
-        if (seizeAmount > userCol) seizeAmount = userCol; // cap at available collateral
-
-        // Effects: liquidator covers the full debt; user's debt is cleared.
-        borrowToken.safeTransferFrom(msg.sender, address(this), d);
-        poolLiquidity += d;
-        debt[user] = 0;
-        totalDebtByAsset[asset] -= d;
-        collateral[user][asset] = userCol - seizeAmount;
-        unhealthySince[user] = 0;
-        if (collateral[user][asset] == 0) {
-            collateralAsset[user] = address(0);
+        // Underwater remainder: no collateral left but debt remains => reserve write-off.
+        if (colLeft == 0 && debt[user] > 0) {
+            _writeOff(user, asset);
         }
 
-        // Interaction: hand seized collateral to the liquidator.
-        IERC20(asset).safeTransfer(msg.sender, seizeAmount);
+        if (debt[user] == 0) {
+            _clearFlag(user, asset);
+            if (colLeft == 0) collateralAsset[user] = address(0);
+        } else {
+            // Still open: keep the flag only while the position remains unhealthy.
+            _clearFlagIfHealthy(user, asset);
+        }
 
-        emit Liquidated(user, msg.sender, asset, d, seizeAmount, cfg.liqPenaltyBps);
+        // Interactions: pull the slice, hand over the collateral.
+        if (slice > 0) borrowToken.safeTransferFrom(msg.sender, address(this), slice);
+        if (seize > 0) IERC20(asset).safeTransfer(msg.sender, seize);
+
+        emit Liquidated(user, msg.sender, asset, slice, seize, bonusBps);
+    }
+
+    /**
+     * @notice Permissionless flag refresh: clears `user`'s soft-liquidation flag when the
+     *         position is healthy again (HF >= 1, or no debt). No-op returning false otherwise,
+     *         including while the breaker is tripped or the price is unreadable.
+     * @dev OFF-CHAIN AGENTS: call this every tick after a price recovery, i.e. whenever
+     *      `unhealthySince(user) != 0` but {quoteLiquidation} reports `liquidatable == false`.
+     *      Otherwise a stale flag from an earlier dip would let a later dip skip the grace period.
+     *      The flag is also cleared automatically on deposit / repay / repayFor / partial
+     *      liquidation whenever they restore health.
+     */
+    function refreshFlag(address user) external nonReentrant returns (bool cleared) {
+        return _clearFlagIfHealthy(user, collateralAsset[user]);
+    }
+
+    /**
+     * @dev Liquidation math shared by {quoteLiquidation} and {liquidate}.
+     *      backed = collateralValue / (1 + bonus), in mUSDC units: the most debt the collateral
+     *      can repay at the bonus. slice = min(requested, debt, backed).
+     *      seize  = slice * (1 + bonus) / price, in collateral units, capped at the collateral.
+     *      When the slice is collateral-bound (slice == backed <= debt) the full collateral is
+     *      seized, so rounding never strands dust collateral against unpayable debt.
+     */
+    function _liquidationSlice(
+        address user,
+        address asset,
+        uint256 price,
+        uint256 requested,
+        uint256 bonusBps
+    ) internal view returns (uint256 slice, uint256 seize) {
+        uint256 userCol = collateral[user][asset];
+        uint256 d = debt[user];
+        uint256 colUnit = 10 ** IERC20Metadata(asset).decimals();
+        uint256 debtUnit = 10 ** borrowDecimals;
+
+        uint256 backed = (userCol * price * debtUnit * BPS) / (colUnit * PRICE_SCALE * (BPS + bonusBps));
+        uint256 cap = d < backed ? d : backed;
+        slice = requested < cap ? requested : cap;
+
+        if (slice == backed && backed <= d) {
+            seize = userCol;
+        } else {
+            seize = (slice * (BPS + bonusBps) * PRICE_SCALE * colUnit) / (BPS * debtUnit * price);
+            if (seize > userCol) seize = userCol;
+        }
+    }
+
+    /**
+     * @dev Write off `user`'s remaining debt after all collateral has been seized. The reserve
+     *      pays as much as it can into the pool; any shortfall is recorded as bad debt.
+     */
+    function _writeOff(address user, address asset) internal {
+        uint256 remaining = debt[user];
+        uint256 covered = remaining < reserve ? remaining : reserve;
+
+        reserve -= covered;
+        poolLiquidity += covered;
+        debt[user] = 0;
+        totalDebtByAsset[asset] -= remaining;
+        emit DebtWrittenOff(user, asset, remaining, covered);
+
+        if (remaining > covered) {
+            uint256 shortfall = remaining - covered;
+            badDebt += shortfall;
+            emit BadDebtRecorded(user, asset, shortfall);
+        }
+    }
+
+    /// @dev Clear the flag if the position is healthy (HF >= 1 or no debt). Never reverts on an
+    ///      unreadable price: a frozen or stale price cannot prove recovery, so the flag stays.
+    function _clearFlagIfHealthy(address user, address asset) internal returns (bool) {
+        if (unhealthySince[user] == 0) return false;
+        if (debt[user] == 0) {
+            _clearFlag(user, asset);
+            return true;
+        }
+        if (asset == address(0) || oracle.isCircuitBroken(asset)) return false;
+        try riskEngine.getHealthFactor(user) returns (uint256 hf) {
+            if (hf < WAD) return false;
+        } catch {
+            return false;
+        }
+        _clearFlag(user, asset);
+        return true;
     }
 
     function _clearFlag(address user, address asset) internal {

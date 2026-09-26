@@ -211,7 +211,9 @@ describe("Terravault — E2E live demo flow", () => {
     });
 
     it("liquidate() reverts — nobody can seize the position on a frozen/fake price", async () => {
-      await expect(vault.connect(liquidator).liquidate(user.address)).to.be.reverted;
+      await expect(
+        vault.connect(liquidator).liquidate(user.address, USD6("34000"))
+      ).to.be.revertedWith("cannot liquidate on frozen price");
     });
 
     it("the user's position is fully intact — 34,000 debt, 50,000 collateral, NOT liquidated", async () => {

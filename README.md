@@ -147,7 +147,7 @@ Block explorer (Blockscout): `https://hashkeychain-testnet-explorer.alt.technolo
 - Health-factor math, borrow/liquidation gating, and dynamic (single-source-aware) LTV in `RiskEngine` + `AssetQualityRegistry`.
 - Reentrancy-guarded, pausable, role-gated fund flows and grace-period soft liquidation in `CollateralVault`.
 - The off-chain keeper (price pusher) and the AI Risk Monitor agent, both signing with a scoped keeper key.
-- Tests: `test/OracleAggregator.test.ts`, `test/e2e-demo-flow.test.ts`.
+- Tests: `test/OracleAggregator.test.ts`, `test/e2e-demo-flow.test.ts`, `test/liquidation-v2.test.ts`.
 
 **Mocked / demo-scoped:**
 - `bMTB` and `mUSDC` are mock ERC-20s with public `mint`; there is no real tokenized T-bill, issuer, or custodian.
@@ -158,8 +158,8 @@ Block explorer (Blockscout): `https://hashkeychain-testnet-explorer.alt.technolo
 **Known limitations we own (not defended — see `docs/DEMO_BRIEF.md` §5):**
 - The breaker can't distinguish manipulation from a real crash or feed-latency skew (single-block, full-range deviation; no sustained-deviation gate).
 - Single-source mode caps only *new* borrows; existing positions still run on the lone feed, and liquidations remain live. Fix: suspend seizure in single-source mode.
-- `unhealthySince` is not reset on a price-driven recovery, which can defeat the grace period on a later dip.
-- Liquidation is unprofitable once a position is underwater (full-repay, collateral-capped seize, no partial liquidation); a reserve / Dutch-auction backstop is needed.
+- `unhealthySince` is cleared on a price-driven recovery only when someone calls the permissionless `refreshFlag(user)` (or `liquidate` on the recovered position); deposit / repay / repayFor / partial liquidation clear it automatically. Off-chain agents should call `refreshFlag` each tick after a recovery.
+- Liquidation is partial and permissionless (`quoteLiquidation` + `liquidate(user, repayAmount)`); the slice is capped at what the collateral backs at the 5% bonus so it always pays. The debt left on a fully-seized position is written off against a protocol `reserve` (`fundReserve`); if the reserve is short it is recorded as `badDebt` and absorbed by the pool. There is no Dutch auction, so a deeply underwater position still relies on the reserve.
 - The keeper key holds price-authorship, `clearBreaker`, and `pause` together; production must separate these and decentralize the guardian.
 
 ## License

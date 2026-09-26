@@ -21,12 +21,25 @@ async function main() {
   const aggregator = await ethers.getContractAt("OracleAggregator", c.aggregator);
 
   const broken = await aggregator.isCircuitBroken(c.bMTB);
+  const q = await vault.quoteLiquidation(user);
+  // Use the vault's own quote as the slice; fall back to the full debt when it quotes nothing
+  // (frozen price / healthy), so the call still exercises the guards.
+  const repay = q.maxRepay > 0n ? q.maxRepay : await vault.debt(user);
   console.log("─".repeat(74));
-  console.log(`Attempting liquidate(${user}) on ${network.name}`);
+  console.log(`Attempting liquidate(${user}, ${ethers.formatUnits(repay, 6)} mUSDC) on ${network.name}`);
   console.log(`  circuit breaker : ${broken ? "🛑 TRIPPED" : "armed"}`);
+  console.log(
+    `  quote           : liquidatable=${q.liquidatable} graceLeft=${q.graceSecondsLeft}s ` +
+      `maxRepay=${ethers.formatUnits(q.maxRepay, 6)} mUSDC collateralOut=${ethers.formatUnits(q.collateralOut, 18)} ` +
+      `bonus=${Number(q.bonusBps) / 100}%`
+  );
   try {
-    await vault.liquidate.staticCall(user);
-    console.log("  result          : ⚠ liquidation would go through");
+    await vault.liquidate.staticCall(user, repay > 0n ? repay : 1n);
+    console.log(
+      q.liquidatable && q.graceSecondsLeft === 0n
+        ? "  result          : ⚠ liquidation would go through"
+        : "  result          : call would succeed without seizing (starts or clears the grace flag)"
+    );
   } catch (e: any) {
     const reason: string = e?.reason || e?.shortMessage || e?.message || String(e);
     console.log(`  result          : ❌ REVERTED — ${reason}`);

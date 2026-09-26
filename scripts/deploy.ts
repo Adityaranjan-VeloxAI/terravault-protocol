@@ -168,6 +168,16 @@ async function main() {
     }
   }
 
+  // --- 9b. Protocol reserve (bad-debt backstop for underwater liquidations) --
+  // mUSDC is a demo token with open mint, so seeding the reserve is free.
+  const RESERVE_SEED = ethers.parseUnits(process.env.RESERVE_SEED_MUSDC || "5000", 6);
+  if (RESERVE_SEED > 0n) {
+    await (await mUSDC.mint(deployer.address, RESERVE_SEED)).wait();
+    await (await mUSDC.approve(vaultAddr, RESERVE_SEED)).wait();
+    await (await vault.fundReserve(RESERVE_SEED)).wait();
+    console.log(`  vault.fundReserve(${ethers.formatUnits(RESERVE_SEED, 6)} mUSDC)                 ✓`);
+  }
+
   // Deployer is the demo user (front-end connects this wallet).
   const demoUser = deployer.address;
 
