@@ -72,7 +72,7 @@ function rpcUrl(net: string): string {
   if (net === "hashkeyMainnet") {
     return process.env.HASHKEY_MAINNET_RPC || "https://mainnet.hsk.xyz";
   }
-  return process.env.HASHKEY_TESTNET_RPC || "https://hashkey-testnet.drpc.org";
+  return process.env.HASHKEY_TESTNET_RPC || "https://testnet.hsk.xyz";
 }
 
 // Defaults reproduce the calm baseline: bMTB $1.02, mUSDC $1.00, both feeds.

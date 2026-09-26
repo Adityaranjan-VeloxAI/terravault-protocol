@@ -67,7 +67,7 @@ Target chain (from `hardhat.config.ts`):
 
 | Network | chainId | Gas token | RPC |
 |---|---|---|---|
-| HashKey Testnet | 133 | HSK | `https://hashkey-testnet.drpc.org` |
+| HashKey Testnet | 133 | HSK | `https://testnet.hsk.xyz` |
 | HashKey Mainnet | 177 | HSK | `https://mainnet.hsk.xyz` |
 | Local Hardhat | 31337 | — | in-process |
 

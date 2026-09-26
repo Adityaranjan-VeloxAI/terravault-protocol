@@ -8,14 +8,14 @@ dotenv.config();
 // TERRAVAULT — Hardhat configuration
 //
 // Target chain: HashKey Chain (gas token HSK — NEVER assume ETH / chainId 1).
-//   - HashKey Testnet: chainId 133, RPC https://hashkey-testnet.drpc.org
+//   - HashKey Testnet: chainId 133, RPC https://testnet.hsk.xyz (drpc.org needs a paid plan)
 //   - HashKey Mainnet: chainId 177, RPC https://mainnet.hsk.xyz
 //
 // RPC URLs and private keys are pulled from .env (see .env.example).
 // ---------------------------------------------------------------------------
 
 const HASHKEY_TESTNET_RPC =
-  process.env.HASHKEY_TESTNET_RPC || "https://hashkey-testnet.drpc.org";
+  process.env.HASHKEY_TESTNET_RPC || "https://testnet.hsk.xyz";
 const HASHKEY_MAINNET_RPC =
   process.env.HASHKEY_MAINNET_RPC || "https://mainnet.hsk.xyz";
 
