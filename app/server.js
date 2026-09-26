@@ -18,6 +18,12 @@ const NETWORK = process.env.NETWORK || "hashkeyTestnet";
 const CONTROL_FILE = path.join(ROOT, "scripts", "keeper", "demo-control.json");
 const TS_NODE = path.join(ROOT, "node_modules", "ts-node", "dist", "bin.js");
 const HARDHAT = fs.realpathSync(path.join(ROOT, "node_modules", ".bin", "hardhat"));
+// The public HashKey RPC rate-limits by IP (Cloudflare error 1015), so keep the
+// services' polling gentle unless the environment overrides it.
+process.env.PUSHER_INTERVAL_MS ||= "20000";
+process.env.AGENT_INTERVAL_MS ||= "10000";
+process.env.LIQUIDATOR_INTERVAL_MS ||= "15000";
+
 const SERVICES = {
   keeper: "scripts/keeper/guardian-price-pusher.ts",
   agent: "agents/risk-monitor.ts",

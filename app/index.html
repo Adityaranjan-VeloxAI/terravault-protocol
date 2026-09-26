@@ -1219,9 +1219,9 @@
   poll();
   pollLogs();
   pollStatus();
-  setInterval(poll, 4000);
-  setInterval(pollLogs, 6000);
-  setInterval(pollStatus, 3000);
+  setInterval(poll, 10000); // the public HashKey RPC rate-limits by IP (Cloudflare 1015)
+  setInterval(pollLogs, 20000);
+  setInterval(pollStatus, 5000);
   setInterval(pollAgent, 2500);
   renderPresenter();
   if (location.hash === "#sim") setSim(true);
