@@ -26,9 +26,10 @@ const KEEPER_PRIVATE_KEY = process.env.KEEPER_PRIVATE_KEY || "";
 // when a key is left blank during local compile/test).
 function accounts(): string[] {
   const keys = [DEPLOYER_PRIVATE_KEY, KEEPER_PRIVATE_KEY].filter(
-    (k) => typeof k === "string" && /^0x?[0-9a-fA-F]{64}$/.test(k.replace(/^0x/, "0x"))
+    // Accept a 64-hex private key with OR without the 0x prefix (MetaMask exports without it).
+    (k) => typeof k === "string" && /^(0x)?[0-9a-fA-F]{64}$/.test(k.trim())
   );
-  return keys.map((k) => (k.startsWith("0x") ? k : `0x${k}`));
+  return keys.map((k) => (k.trim().startsWith("0x") ? k.trim() : `0x${k.trim()}`));
 }
 
 const config: HardhatUserConfig = {
