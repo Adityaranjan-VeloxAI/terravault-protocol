@@ -123,7 +123,7 @@ Correct — once collateral is worth less than debt, our full-repay/capped-seize
 Conservative LTV plus the grace period minimize it, but if health factor collapses faster than liquidation clears — gap risk — you get bad debt, like any lending protocol. Our first line is the AI monitor repaying from the keeper buffer to restore HF before it hits 1.0. Beyond that it's a protocol reserve or socialized loss. As we discussed, the liquidation function itself is unprofitable once underwater, so the reserve is really the backstop and partial liquidation is on the roadmap. We don't pretend bad debt is impossible.
 
 **Q: Your demo shows health factor 1.275 — walk me through the math.**
-50,000 bMTB at $1.02 is $51,000 of collateral. Liquidation threshold is 85%, so risk-adjusted that's $43,350. Debt is 34,000 mUSDC. Health factor is 43,350 ÷ 34,000 = 1.275. Then the guardian pushes a fake −40% price ($0.612 on one feed); the breaker trips on the 4,000-bps deviation, the price holds at last-good, and the user is not liquidated. That's the whole headline in one number.
+50,000 bMTB at $1.02 is $51,000 of collateral. Liquidation threshold is 85%, so risk-adjusted that's $43,350. Debt is 34,000 mUSDC. Health factor is 43,350 ÷ 34,000 = 1.275. Then the guardian pushes one feed 40% below the honest one ($0.51 against $0.85); the breaker trips on the 4,000-bps deviation, the price holds at last-good, and the user is not liquidated. That's the whole headline in one number.
 
 ### Architecture
 

@@ -1,126 +1,140 @@
 # TerraVault — 3-Minute Demo Runbook
 
-> Timed to the beat. Two presenters (**Driver** = drives the console/control file; **Narrator** = speaks). Every number below is what the seed script produces; every scenario is staged by editing **`scripts/keeper/demo-control.json`**, which the guardian price pusher hot-reloads each tick.
+> Timed to the beat. Two presenters: **Driver** runs the machine, **Narrator** speaks. Every on-screen line below is real output captured from a full rehearsal on HashKey Testnet. Scenarios are staged by editing **`scripts/keeper/demo-control.json`**, which the keeper reloads every tick (~15s).
+
+**Scene order matters: DECLINE first, ATTACK last.** The circuit breaker is manual by design. Once the attack trips it, it stays tripped until a guardian clears it, and while it's tripped the health factor is unreadable, so the agent stands down. Running the attack first would stall the decline scene. Ending on the attack is also the stronger finale, because both the oracle and the agent react to it.
 
 ---
 
-## Pre-flight checklist (do this BEFORE you're on stage)
+## Pre-flight (before you're on stage)
 
-- [ ] Contracts deployed to HashKey Testnet (`npm run deploy`) — **have the deploy tx hash on a sticky note.** If asked "is it live?", show it.
-- [ ] Demo position seeded (`npm run seed`) — HF prints **1.275**. Confirm in the seed output.
-- [ ] Three terminals open and visible on screen:
-  - **T1** — `npm run keeper` (guardian price pusher, prints a status line each tick)
-  - **T2** — `npm run agent` (AI Risk Monitor, prints HF each tick)
-  - **T3** — the front-end console / dashboard connected to the **demoUser** wallet
-- [ ] `demo-control.json` reset to the calm baseline: `bMTB: {priceA: 1.02, priceB: 1.02}`, `mUSDC: {priceA: 1.00, priceB: 1.00}`.
-- [ ] Keeper terminal shows a green **`OK`** line for bMTB at `$1.02`. Agent shows **`✓ OK HF 1.275`**.
-- [ ] Browser zoom up so the back row can read HF and the breaker banner.
+- [ ] `npm run reset` → it must end with **`health factor : 1.275`**. Run it after every rehearsal.
+- [ ] Only **one** keeper and **one** agent running (they share a key; duplicates collide).
+- [ ] Terminals visible on screen, font size up:
+  - **T1** `npm run keeper`: prints one status line per tick
+  - **T2** `npm run agent`: the AI Risk Monitor, one line every ~5s
+  - **T3** a spare terminal for `npm run try-liquidate`, plus a browser tab on the explorer: `https://hashkeychain-testnet-explorer.alt.technology`
+- [ ] Start T1 and T2 **at least 30s before you begin**. T1 shows `agg $1.02  OK`; T2 shows `SETUP approval confirmed.` then `✓ OK HF 1.275 — healthy.`
+- [ ] `demo-control.json` open in an editor, ready to edit. `npm run reset` already wrote the steady values.
+- [ ] Optional visual: the Terravault Console artifact. It's a **UI simulation**, so if you show it, say so. The live proof is T1/T2/T3.
 
-**Scenario cheat-sheet (edit `demo-control.json`, the pusher picks it up on the next tick ~8s):**
-| Scenario | Edit | Expected keeper line |
-|---|---|---|
-| **ATTACK** | `bMTB.priceB = 0.612` | `🛑 CIRCUIT BROKEN (manipulation rejected, last-good retained)` |
-| **DECLINE** | `bMTB.priceA = 0.90` **and** `priceB = 0.90` | `OK` at `$0.90`, agent begins repaying |
-| **STALE** | `bMTB.skipB = true` | `⚠ SINGLE-SOURCE (LTV capped to tier-3 floor)` |
-| **RESET** | back to `1.02 / 1.02`, `skipB: false` | `OK` at `$1.02` |
+**Cheat sheet**
+
+| Scene | Edit in `demo-control.json` | T1 keeper shows | T2 agent shows |
+|---|---|---|---|
+| Steady | `priceA 1.02, priceB 1.02` | `agg $1.02  OK` | `✓ OK HF 1.275` |
+| **DECLINE** | `priceA 0.85` **and** `priceB 0.85` | `agg $0.85  OK` | `🚨 ACT` → `✓ REPAY … HF 1.063 → 1.129` |
+| **ATTACK** | `priceB 0.51` (leave A at 0.85) | `🛑 CIRCUIT BROKEN` | `🛡 GUARD … standing down` |
+| Reset | run `npm run reset`, then restart T2 | `agg $1.02  OK` | `✓ OK HF 1.275` |
+
+Timing: a saved edit reaches the chain within one keeper tick (**≤ ~15s**). The agent reacts within ~5s after that.
 
 ---
 
 ## 0:00 – 0:30 — Hook
 
 **Narrator:**
-> "Tokenized T-bills are the fastest-growing collateral in DeFi. But every lending protocol liquidates on whatever price an oracle prints — so one manipulated feed can wrongly liquidate a healthy borrower. We built TerraVault so that can't happen. Here's a live position: 50,000 tokenized T-bills worth $51,000, borrowing 34,000 dollars, health factor **1.275** — comfortably safe."
+> "Tokenized T-bills are the fastest-growing collateral in DeFi. But lending protocols liquidate on whatever price an oracle prints, so one manipulated feed can wrongly liquidate a healthy borrower. We built TerraVault so that can't happen. This is live on HashKey testnet: 50,000 tokenized T-bills worth $51,000, borrowing $34,000, health factor 1.275."
 
-**Driver:** On **T3**, show the dashboard — collateral $51,000, debt $34,000, **HF 1.275**, breaker status **green / armed**. Point at the two feeds both reading **$1.02**.
-
-*(Leave the baseline running. Keeper T1 shows `OK $1.02`, agent T2 shows `✓ OK HF 1.275`.)*
+**Driver:** Point at T1 (`feeds A=$1.02 B=$1.02  agg $1.02  OK`) and T2 (`✓ OK HF 1.275 — healthy.`).
 
 ---
 
-## 0:30 – 1:30 — The manipulation attack that fails safe *(headline)*
+## 0:30 – 1:30 — A real decline, and the AI agent heals it
 
 **Narrator:**
-> "Now an attacker manipulates one price feed — pushes tokenized T-bills down 40%, to 61 cents. On a normal protocol, this position is instantly underwater and gets liquidated on a fake price. Watch what ours does."
+> "First, a legitimate move. Both price feeds fall together to 85 cents, a real 17% drop. The feeds agree, so the protocol accepts it, and the position genuinely deteriorates."
 
-**Driver:** Edit **`scripts/keeper/demo-control.json`** → set `bMTB.priceB = 0.612`. Save. Wait one keeper tick (~8s).
+**Driver:** In `demo-control.json` set **both** `bMTB.priceA = 0.85` **and** `bMTB.priceB = 0.85`. Save.
 
-**On screen (T1 keeper):**
+**On screen, T1 (next tick):**
 ```
-bMTB  feeds A=$1.02 B=$0.612   agg (reverts — frozen)   🛑 CIRCUIT BROKEN (manipulation rejected, last-good retained)
+#4 bMTB  feeds A=$0.85 B=$0.85   agg $0.85   OK
+```
+
+**On screen, T2 (seconds later):**
+```
+🚨 ACT  HF 1.063 below act 1.100 — intervening.
+→ REPAY repaying 2000.0 mUSDC on behalf of user from buffer…
+✓ REPAY tx 0x5908…efe5 | HF 1.063 → 1.129 | buffer used 2000.0/10000.0 mUSDC
+⚠ WARN HF 1.129 below warn 1.200 — arming buffer, watching closely.
+```
+
+**Narrator (while it repays):**
+> "The AI Risk Monitor checks health factor every few seconds. It crossed the 1.10 action line, so it autonomously repaid from a capped buffer: at most $2,000 per action, and it can only repay. It can never withdraw principal or touch collateral. Health factor went from 1.06 back to 1.13, before liquidation was ever on the table."
+
+**Driver (the "it's real" beat):** Copy the `REPAY tx` hash from T2 and open it on the explorer (`…/tx/<hash>`) in T3's browser tab.
+
+**Narrator (honesty beat, it lands with judges):**
+> "To be straight: today that agent is deterministic policy, not a model, which is deliberate for something that touches funds. The safety property is that it's capped and repay-only, with a seam to add a model for anomaly detection."
+
+---
+
+## 1:30 – 2:30 — The manipulation attack that fails safe *(finale)*
+
+**Narrator:**
+> "Now an attacker compromises one price feed and pushes it to 51 cents, 40% below the honest feed at 85. On a normal protocol, that fake price liquidates this user instantly. Watch."
+
+**Driver:** In `demo-control.json` set `bMTB.priceB = 0.51`. Leave `priceA` at 0.85. Save.
+
+**On screen, T1 (next tick):**
+```
+bMTB  feeds A=$0.85 B=$0.51   agg (reverts — frozen)   🛑 CIRCUIT BROKEN (manipulation rejected, last-good retained)
+```
+
+**On screen, T2:**
+```
+🛡 GUARD bMTB circuit breaker TRIPPED — manipulated feed rejected on-chain. User protected by the breaker; agent standing down (no repay on a frozen price).
 ```
 
 **Narrator (while it trips):**
-> "The two feeds now disagree by 40% — 4,000 basis points against a 500-point limit. The aggregator doesn't pick a winner and doesn't liquidate. It **trips the circuit breaker**, freezes the asset on its last honest price, and blocks both borrows and liquidations. Our user's health factor is untouched. The attack fails safe."
+> "The two feeds disagree by 40%, that's 4,000 basis points against a 500 limit. The aggregator doesn't pick a winner. It trips the circuit breaker, freezes the asset on its last honest price, and blocks borrows and liquidations. Even our own agent stands down, because it won't act on a frozen price."
 
-**Driver:** On **T3**, show:
-- Breaker banner flips to **red / TRIPPED**.
-- Try to trigger a liquidation on the demo user → it **reverts** with `cannot liquidate on frozen price`. Show the revert.
-- HF display still reads **1.275** on last-good (or shows "price frozen").
+**Driver:** In T3 run `npm run try-liquidate`:
+```
+  circuit breaker : 🛑 TRIPPED
+  result          : ❌ REVERTED — execution reverted: cannot liquidate on frozen price
+```
 
 **Narrator (button it):**
-> "A naive oracle liquidates our user here. Ours protects them. That's the headline — and it's enforced in the contract, not a setting."
-
-*(Optional, if you have 10s: Driver resets `demo-control.json` to `1.02/1.02` and shows the keeper clear back to `OK`, or notes the guardian would `clearBreaker` after review.)*
-
----
-
-## 1:30 – 2:30 — The AI agent auto-deleverages on a REAL decline
-
-**Narrator:**
-> "But we don't freeze on legitimate moves. Now both feeds fall together to 90 cents — a real decline, no manipulation. The feeds *agree*, so the price is accepted, and the position genuinely deteriorates."
-
-**Driver:** Edit `demo-control.json` → set **both** `bMTB.priceA = 0.90` **and** `bMTB.priceB = 0.90`. Save. Wait a tick.
-
-**On screen (T1 keeper):** `bMTB feeds A=$0.90 B=$0.90  agg $0.90  OK` — price accepted, no breaker.
-
-**On screen (T2 agent):** HF drops below the thresholds and the agent acts:
-```
-⚠ WARN  HF 1.125 below warn 1.200 — arming buffer, watching closely.
-🚨 ACT  HF 1.080 below act 1.100 — intervening.
-→ REPAY repaying 2000 mUSDC on behalf of user from buffer…
-✓ REPAY tx 0x… | HF 1.080 → 1.146 | buffer used 2000/10000 mUSDC
-```
-
-**Narrator (while the agent repays):**
-> "The AI Risk Monitor is watching health factor every few seconds. It crosses the warn line, then the act line at 1.10, and **autonomously repays from a capped buffer** — at most 2,000 dollars per action, and it can *only* repay, never touch principal or collateral. It deleverages the position back toward safety before it ever reaches liquidation. If the buffer ran out, it escalates and pauses new borrows."
-
-**Driver:** On **T3**, show HF ticking back up as the repays land, debt decreasing, buffer counter climbing.
-
-**Narrator (honesty beat — say this, it lands with judges):**
-> "And to be straight: today that agent is deterministic policy, not a model — which is deliberate for something that touches funds. The safety property is that it's capped and repay-only, with a clean seam to add a model for anomaly detection later."
+> "That's a live liquidation attempt, and the contract refuses it. A naive oracle liquidates our user here. Ours protects them, and it's enforced in the contract, not a setting."
 
 ---
 
 ## 2:30 – 3:00 — Close
 
 **Narrator:**
-> "So: manipulation is rejected by the circuit breaker; legitimate declines flow through and get auto-deleveraged; and when the oracle degrades to a single feed, the protocol automatically caps leverage to a conservative floor. Every one of those is enforced in the contracts — reentrancy-guarded, prices only through the aggregator, no borrow or liquidation on a broken price. It's built for RWA settlement reality on HashKey, a compliance-first chain. We know exactly what's demo-scoped versus production-ready, and we're happy to walk the code. That's TerraVault."
+> "So: legitimate declines flow through and get auto-deleveraged by a capped agent; manipulation is rejected by the circuit breaker; and if a feed goes quiet, the protocol drops to single-source and caps leverage to 45%, which is covered in our test suite. Prices only move through the aggregator, fund flows are reentrancy-guarded, and there's no borrow or liquidation on a broken price. It's built for RWA settlement reality on HashKey. We know exactly what's demo-scoped versus production-ready, and we're happy to walk the code. That's TerraVault."
 
-**Driver (optional 5s flourish):** stage the **STALE** scenario — set `bMTB.skipB = true`, show `⚠ SINGLE-SOURCE (LTV capped to tier-3 floor)` on T1 — then reset. Only do this if the first two beats ran clean and you have time.
-
----
-
-## Backup plan if live testnet is down
-
-**If HashKey Testnet is unreachable or txs won't confirm, do not stall — switch to local.** Everything runs identically against a local Hardhat node with mocks; the numbers are the same.
-
-- **One-command fallback:** in a spare terminal, `npx hardhat node` (chainId 31337), then `npm run deploy:local` and `npm run seed:local`. Point the keeper/agent at `deployments/latest.json` (they auto-fall-back to it) and re-run `npm run keeper` / `npm run agent`. The demo beats are identical.
-- **If even that fails:** you have a pre-recorded screen capture of the three beats — play it and narrate live. Say plainly: *"Testnet's congested, so this is a capture from ten minutes ago — the code is the same and I'll walk any of it."* Do **not** pretend it's live.
-- **Never** claim it's deployed to HashKey testnet if the deploy didn't land. If you have the tx hash, show it; if you don't, say it ran on a local fork. Honesty on this is free and a false claim is fatal.
+*(Leave the breaker tripped. It's the resting state until a guardian reviews it, which is the point.)*
 
 ---
 
-## Who says what (2-person split)
+## After every run (and before you go on stage)
 
-| | **Narrator** (faces judges, tells the story) | **Driver** (owns the machine, never speaks unless handing off a number) |
+`Ctrl+C` the agent → `npm run reset` (about a minute on testnet; clears the breaker, restores debt to 34,000, refills the buffer) → restart `npm run agent`. The keeper can stay running.
+
+---
+
+## Backup plan
+
+- **Testnet slow:** keep talking. Ticks are ~15s; never narrate over a pending transaction.
+- **Testnet down:** run `npx hardhat test test/e2e-demo-flow.test.ts`. It executes the same contracts through every beat (onboard → borrow at HF 1.275 → manipulation blocked → decline healed by the agent → stale feed caps LTV) on an in-process chain in about a second, and the test names narrate each step. Say plainly that it's a local chain. The Terravault Console simulation covers the visuals.
+- **Never** claim it's live on testnet if it isn't. The contract addresses in the README link to the explorer if anyone asks.
+
+---
+
+## Who says what
+
+| | **Narrator** (faces judges) | **Driver** (owns the machine) |
 |---|---|---|
-| **Pre-flight** | Confirms the story arc, holds the deploy-tx-hash sticky note | Runs deploy + seed, opens 3 terminals, resets `demo-control.json` |
-| **0:00–0:30 Hook** | Delivers the hook, points at HF 1.275 | Brings up the dashboard, points at both feeds $1.02 |
-| **0:30–1:30 Attack** | Narrates the trip, buttons the headline | Edits `priceB = 0.612`, shows the `🛑` line, triggers the reverting liquidation on T3 |
-| **1:30–2:30 Decline** | Narrates the agent, delivers the honesty beat | Sets both prices to `0.90`, points at the agent's `→ REPAY` lines and rising HF |
-| **2:30–3:00 Close** | Delivers the close | Optional STALE flourish, then resets to baseline |
-| **Q&A** | Leads answers; on landmine questions, concedes + names the fix (see `DEMO_BRIEF.md` §4) | Pulls up the exact contract line on screen if a judge wants to read code |
+| Pre-flight | Confirms the arc | `npm run reset`, starts T1 and T2, opens the explorer tab |
+| 0:00–0:30 Hook | Delivers the hook, HF 1.275 | Points at T1 `OK $1.02` and T2 `HF 1.275` |
+| 0:30–1:30 Decline | Narrates the agent, delivers the honesty beat | Sets both prices to `0.85`, opens the repay tx on the explorer |
+| 1:30–2:30 Attack | Narrates the trip, buttons the headline | Sets `priceB = 0.51`, runs `npm run try-liquidate` |
+| 2:30–3:00 Close | Delivers the close | Leaves the breaker tripped; resets after you leave the stage |
+| Q&A | Leads answers; on landmine questions, concedes and names the fix (`DEMO_BRIEF.md` §4) | Pulls up the exact contract line if a judge wants code |
 
-**Handoff cue:** Narrator says a scenario name ("Now an attacker…", "Now both feeds fall…") → Driver edits `demo-control.json` and waits for the keeper tick. Narrator paces to the tick; never talk over a pending transaction.
+**Handoff cue:** Narrator names the scene ("First, a legitimate move…", "Now an attacker…") → Driver edits and saves → Narrator paces to the tick.
 
-**Q&A discipline:** whoever knows the code answers. If it's a code-level landmine (breaker false-positive, single-source, one-key-two-feeds, `unhealthySince` bug, liquidation economics), **concede precisely and name the production fix** — that's the winning move, and all eight are pre-scripted in `DEMO_BRIEF.md` §4. Do not defend the demo wiring.
+**Q&A discipline:** whoever knows the code answers. On a code-level landmine (breaker false-positive, single-source, one key behind both feeds, `unhealthySince`, liquidation economics), **concede precisely and name the production fix.** All of them are pre-scripted in `DEMO_BRIEF.md` §4. Do not defend the demo wiring.

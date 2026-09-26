@@ -91,19 +91,22 @@ Deploy wires scoped `AccessControl` roles (no owner god-mode): the keeper key re
 
 ## Run the demo end-to-end
 
-Open three terminals after `deploy` + `seed`:
+After `deploy` + `seed`, run the keeper and the agent in two terminals (one of each; they share the keeper key):
 
 ```bash
-npm run keeper           # scripts/keeper/guardian-price-pusher.ts — pushes prices + pokes the aggregator each tick
+npm run keeper           # scripts/keeper/guardian-price-pusher.ts — pushes bMTB prices + pokes the aggregator each tick
 npm run agent            # agents/risk-monitor.ts — AI Risk Monitor: polls HF, auto-repays from the capped buffer
-# + your front-end console connected to the demoUser wallet
+npm run try-liquidate    # attempts to liquidate the demo user (static call, no gas) and shows the result
+npm run reset            # back to the opening state: breaker cleared, debt 34,000, buffer refilled, HF 1.275
 ```
 
-Stage the three scenarios by editing **`scripts/keeper/demo-control.json`** (hot-reloaded by the keeper each tick):
+Stage scenarios by editing **`scripts/keeper/demo-control.json`** (reloaded by the keeper each tick). Run them in this order, because the breaker is manual and stays tripped after the attack:
 
-- **ATTACK** — set `bMTB.priceB = 0.612` (a −40% single-feed manipulation). Deviation ≈ 4000 bps > 500 bps → breaker trips, last-good retained, `getPrice`/`borrow`/`liquidate` revert for bMTB. The user is **not** liquidated.
-- **DECLINE** — set both `bMTB.priceA` and `bMTB.priceB` to `0.90` (feeds agree). Price accepted, HF falls below 1.10, the agent repays from the capped buffer to restore HF.
-- **STALE** — set `bMTB.skipB = true` (adapterB stops updating). After `maxStaleness` the aggregator falls to a single source and the registry caps effective LTV to the 45% tier-3 floor.
+1. **DECLINE**: set both `bMTB.priceA` and `bMTB.priceB` to `0.85` (feeds agree). The price is accepted and HF falls to 1.063, below the 1.10 act line, so the agent repays 2,000 mUSDC from its capped buffer and HF recovers to 1.129.
+2. **ATTACK**: set `bMTB.priceB = 0.51` with A still at 0.85. Deviation is 4,000 bps (40%) against a 500 bps limit, so the breaker trips, the last-good price is kept, and `getPrice`/`borrow`/`liquidate` revert for bMTB. The user is **not** liquidated, and the agent stands down. `npm run try-liquidate` shows `cannot liquidate on frozen price`.
+3. **STALE** (covered by the e2e test; takes `maxStaleness` = 90s live): set `bMTB.skipB = true`. Once adapter B's price ages out, the aggregator falls to a single source and the registry caps effective LTV to the 45% tier-3 floor.
+
+Then `npm run reset` and restart the agent before the next run. All of this has been rehearsed end-to-end on HashKey Testnet.
 
 The full timed script (what to click, what to say, presenter split, and the testnet-down backup) is in [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md). The Q&A brief and glossary are in [`docs/DEMO_BRIEF.md`](docs/DEMO_BRIEF.md).
 
@@ -112,7 +115,7 @@ The full timed script (what to click, what to say, presenter split, and the test
 - Deposit **50,000 bMTB** @ **$1.02** = **$51,000** collateral value.
 - Borrow **34,000 mUSDC**.
 - Health factor = (51,000 × 0.85) / 34,000 = **1.275**.
-- Attack pushes one feed to **$0.612** → deviation ≈ **4000 bps** (40%) vs a **500 bps** (5%) limit → **breaker trips**.
+- Attack (run after the decline, feed A at $0.85) pushes feed B to **$0.51** → deviation ≈ **4000 bps** (40%) vs a **500 bps** (5%) limit → **breaker trips**.
 - bMTB Tier 1: maxLtv **8000**, liqThreshold **8500**, liqPenalty **500**, grace period **300s**.
 - Agent thresholds: warn **1.20**, act **1.10**, target **1.30**; repay ≤ **2,000 mUSDC/action**, buffer cap **10,000 mUSDC**.
 

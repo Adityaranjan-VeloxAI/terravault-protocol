@@ -50,7 +50,8 @@ async function main() {
   // off-chain pusher/agent (which sign with that key) get the scoped roles.
   let keeperAddress: string;
   const keeperPk = process.env.KEEPER_PRIVATE_KEY || "";
-  if (/^0x?[0-9a-fA-F]{64}$/.test(keeperPk.replace(/^0x/, "0x"))) {
+  // Accept a 64-hex key with or without 0x (MetaMask exports it without).
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(keeperPk.trim())) {
     keeperAddress = new ethers.Wallet(
       keeperPk.startsWith("0x") ? keeperPk : `0x${keeperPk}`
     ).address;

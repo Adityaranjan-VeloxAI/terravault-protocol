@@ -17,9 +17,9 @@
  *     "mUSDC": { "priceA": 1.00, "priceB": 1.00 }
  *   }
  * Staged scenarios:
- *   • ATTACK  — set bMTB.priceB = 0.612 (a -40% single-feed manipulation).
+ *   • ATTACK  — set bMTB.priceB = 0.51 (one feed 40% below the honest $0.85 feed).
  *               poke() sees ~3900bps > 500bps => trips the breaker, keeps last-good.
- *   • DECLINE — set BOTH bMTB.priceA & priceB = 0.90 (feeds agree) => accepted.
+ *   • DECLINE — set BOTH bMTB.priceA & priceB = 0.85 (feeds agree) => accepted.
  *   • STALE   — set bMTB.skipB = true => adapterB stops updating => after
  *               maxStaleness the aggregator falls to a single source.
  */
@@ -68,6 +68,26 @@ function loadDeployment() {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+// Keeper and agent share one key over a load-balanced RPC. A fixed gas limit
+// avoids under-estimates from a node that is behind (unused gas is refunded),
+// and a send rejected before inclusion (nonce race, stale node) is retried.
+// A tx that was mined is never re-sent.
+const TX = { gasLimit: 500_000 };
+async function send(fn: () => Promise<any>, tries = 5): Promise<any> {
+  for (let i = 0; ; i++) {
+    try {
+      return await (await fn()).wait();
+    } catch (e: any) {
+      if (e?.receipt || i >= tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+}
+const short = (e: unknown): string => {
+  const m: string = (e as any)?.shortMessage || (e as Error)?.message || String(e);
+  return m.length > 140 ? m.slice(0, 140) + "…" : m;
+};
+
 function rpcUrl(net: string): string {
   if (net === "hashkeyMainnet") {
     return process.env.HASHKEY_MAINNET_RPC || "https://mainnet.hsk.xyz";
@@ -104,7 +124,8 @@ async function main() {
   const net = dep.network || process.env.NETWORK || "hashkeyTestnet";
 
   const pk = process.env.KEEPER_PRIVATE_KEY;
-  if (!pk || !/^0x?[0-9a-fA-F]{64}$/.test(pk.replace(/^0x/, "0x"))) {
+  // Accept a 64-hex key with or without 0x (MetaMask exports it without).
+  if (!pk || !/^(0x)?[0-9a-fA-F]{64}$/.test(pk.trim())) {
     throw new Error("KEEPER_PRIVATE_KEY is missing or malformed in .env");
   }
   const provider = new JsonRpcProvider(rpcUrl(net));
@@ -114,10 +135,10 @@ async function main() {
   const adapterB = new Contract(c.adapterB, ADAPTER_ABI, wallet);
   const aggregator = new Contract(c.aggregator, AGGREGATOR_ABI, wallet);
 
-  const assets: { name: string; addr: string }[] = [
-    { name: "bMTB", addr: c.bMTB },
-    { name: "mUSDC", addr: c.mUSDC },
-  ];
+  // Only bMTB is pushed: on-chain, debt is valued at a hard $1 mUSDC peg
+  // (RiskEngine._debtValue1e8) and every getPrice read is for the collateral,
+  // so pushing mUSDC would double the keeper's gas and tx time for nothing.
+  const assets: { name: string; addr: string }[] = [{ name: "bMTB", addr: c.bMTB }];
 
   console.log("═".repeat(74));
   console.log("TERRAVAULT — Guardian Price Pusher");
@@ -136,11 +157,14 @@ async function main() {
       const pB = parseUnits(String(cc.priceB ?? 1), PRICE_DP);
       try {
         // 1) push into each adapter (unless skipped so it can go stale)
-        if (!cc.skipA) await (await adapterA.updatePrice(addr, pA)).wait();
-        if (!cc.skipB) await (await adapterB.updatePrice(addr, pB)).wait();
+        if (!cc.skipA) await send(() => adapterA.updatePrice(addr, pA, TX));
+        if (!cc.skipB) await send(() => adapterB.updatePrice(addr, pB, TX));
 
         // 2) run aggregator logic
-        await (await aggregator.poke(addr)).wait();
+        await send(() => aggregator.poke(addr, TX));
+        // Let load-balanced RPC nodes catch up before reading state, so the status
+        // line reflects this tick's poke rather than the block before it.
+        await new Promise((r) => setTimeout(r, 2000));
 
         // 3) read resulting state
         const broken: boolean = await aggregator.isCircuitBroken(addr);
@@ -166,20 +190,28 @@ async function main() {
           )} ${flag}`
         );
       } catch (e) {
-        console.error(`[${ts()}] #${tick} ${name} push/poke failed: ${(e as Error).message}`);
+        console.error(`[${ts()}] #${tick} ${name} push/poke failed: ${short(e)}`);
       }
     }
   };
 
-  await run();
-  const timer = setInterval(run, INTERVAL_MS);
   const stop = () => {
-    clearInterval(timer);
     console.log("\nPusher stopped.");
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+
+  // Sequential loop, not setInterval: one tick sends several confirmed txs and
+  // can outlast the interval, and overlapping ticks would race the keeper nonce.
+  for (;;) {
+    try {
+      await run();
+    } catch (e) {
+      console.error(`[${ts()}] tick failed: ${short(e)}`);
+    }
+    await new Promise((r) => setTimeout(r, INTERVAL_MS));
+  }
 }
 
 main().catch((err) => {

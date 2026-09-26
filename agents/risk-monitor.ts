@@ -79,6 +79,26 @@ function loadDeployment() {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+// Agent and keeper share one key over a load-balanced RPC. A fixed gas limit
+// avoids under-estimates from a node that is behind (unused gas is refunded),
+// and a send rejected before inclusion (nonce race, stale node) is retried.
+// A tx that was mined is never re-sent, so a repay can't land twice.
+const TX = { gasLimit: 500_000 };
+async function send(fn: () => Promise<any>, tries = 5): Promise<any> {
+  for (let i = 0; ; i++) {
+    try {
+      return await (await fn()).wait();
+    } catch (e: any) {
+      if (e?.receipt || i >= tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+}
+const short = (e: unknown): string => {
+  const m: string = (e as any)?.shortMessage || (e as Error)?.message || String(e);
+  return m.length > 140 ? m.slice(0, 140) + "…" : m;
+};
+
 function rpcUrl(net: string): string {
   if (net === "hashkeyMainnet") {
     return process.env.HASHKEY_MAINNET_RPC || "https://mainnet.hsk.xyz";
@@ -104,7 +124,8 @@ async function main() {
   const user = dep.demoUser as string;
 
   const pk = process.env.KEEPER_PRIVATE_KEY;
-  if (!pk || !/^0x?[0-9a-fA-F]{64}$/.test(pk.replace(/^0x/, "0x"))) {
+  // Accept a 64-hex key with or without 0x (MetaMask exports it without).
+  if (!pk || !/^(0x)?[0-9a-fA-F]{64}$/.test(pk.trim())) {
     throw new Error("KEEPER_PRIVATE_KEY is missing or malformed in .env");
   }
   const provider = new JsonRpcProvider(rpcUrl(net));
@@ -131,16 +152,20 @@ async function main() {
   );
   console.log("═".repeat(74));
 
-  // Ensure the vault can pull the buffer for repayFor.
-  try {
+  // repayFor pulls the buffer from this wallet, so the vault needs an allowance.
+  // Checked at startup and again before every repay, so an approval that fails
+  // (e.g. a nonce race with the keeper) heals itself instead of breaking repays.
+  const ensureAllowance = async () => {
     const allowance: bigint = await mUSDC.allowance(wallet.address, c.vault);
-    if (allowance < BUFFER_CAP) {
-      log("SETUP", "approving vault to spend keeper buffer (mUSDC)…");
-      await (await mUSDC.approve(c.vault, MaxUint256)).wait();
-      log("SETUP", "approval confirmed.");
-    }
+    if (allowance >= BUFFER_CAP) return;
+    log("SETUP", "approving vault to spend keeper buffer (mUSDC)…");
+    await send(() => mUSDC.approve(c.vault, MaxUint256, TX));
+    log("SETUP", "approval confirmed.");
+  };
+  try {
+    await ensureAllowance();
   } catch (e) {
-    log("SETUP", `⚠ could not set allowance: ${(e as Error).message}`);
+    log("SETUP", `⚠ allowance not set yet (${short(e)}); will retry before the first repay.`);
   }
 
   let spent = 0n; // cumulative mUSDC deployed from the buffer
@@ -171,7 +196,7 @@ async function main() {
     try {
       currentHf = await riskEngine.getHealthFactor(user);
     } catch (e) {
-      log("WARN", `getHealthFactor reverted (${(e as Error).message}). Skipping tick.`);
+      log("WARN", `health factor unreadable (${short(e)}): price stale or frozen, skipping tick.`);
       return;
     }
 
@@ -225,10 +250,16 @@ async function main() {
     }
 
     try {
+      await ensureAllowance();
       log("→ REPAY", `repaying ${formatUnits(amount, 6)} mUSDC on behalf of user from buffer…`);
-      const txr = await (await vault.repayFor(user, amount)).wait();
+      const txr = await send(() => vault.repayFor(user, amount, TX));
       spent += amount;
-      const newHf: bigint = await riskEngine.getHealthFactor(user);
+      // A read right after the write can hit a node one block behind; wait for the new HF.
+      let newHf: bigint = currentHf;
+      for (let i = 0; i < 4 && newHf === currentHf; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        newHf = await riskEngine.getHealthFactor(user);
+      }
       log(
         "✓ REPAY",
         `tx ${txr?.hash ?? ""} | HF ${hf(currentHf)} → ${hf(newHf)} | ` +
@@ -240,7 +271,7 @@ async function main() {
         await escalate(newHf);
       }
     } catch (e) {
-      log("✗ REPAY", `repay failed: ${(e as Error).message}`);
+      log("✗ REPAY", `repay failed: ${short(e)}`);
     }
   };
 
@@ -254,23 +285,31 @@ async function main() {
       `buffer exhausted and HF ${hf(currentHf)} still critical — pausing new borrows and alerting ops.`
     );
     try {
-      await (await vault.pause()).wait();
+      await send(() => vault.pause(TX));
       paused = true;
       log("🚨 ESCALATE", "vault borrows PAUSED (PAUSER_ROLE). Human intervention required.");
     } catch (e) {
-      log("🚨 ESCALATE", `could not pause vault (need PAUSER_ROLE?): ${(e as Error).message}`);
+      log("🚨 ESCALATE", `could not pause vault (need PAUSER_ROLE?): ${short(e)}`);
     }
   };
 
-  await tick();
-  const timer = setInterval(tick, INTERVAL_MS);
   const stop = () => {
-    clearInterval(timer);
     console.log("\nRisk monitor stopped.");
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+
+  // Sequential loop, not setInterval: if a repay tick outlasts the interval, an
+  // overlapping tick could decide to repay again before the first one lands.
+  for (;;) {
+    try {
+      await tick();
+    } catch (e) {
+      log("WARN", `tick failed: ${short(e)}`);
+    }
+    await new Promise((r) => setTimeout(r, INTERVAL_MS));
+  }
 }
 
 main().catch((err) => {

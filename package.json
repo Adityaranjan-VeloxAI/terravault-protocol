@@ -13,6 +13,9 @@
     "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
     "seed": "hardhat run scripts/seed-demo-data.ts --network hashkeyTestnet",
     "seed:local": "hardhat run scripts/seed-demo-data.ts --network hardhat",
+    "reset": "hardhat run scripts/reset-demo.ts --network hashkeyTestnet",
+    "reset:local": "hardhat run scripts/reset-demo.ts --network localhost",
+    "try-liquidate": "hardhat run scripts/try-liquidate.ts --network hashkeyTestnet",
     "keeper": "ts-node scripts/keeper/guardian-price-pusher.ts",
     "agent": "ts-node agents/risk-monitor.ts"
   },

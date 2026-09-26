@@ -190,11 +190,14 @@ async function main() {
   } else {
     // Re-push prices so the borrow sees a fresh last-good price inside maxStaleness.
     await refreshPrices();
-    await (await bMTB.connect(userSigner).approve(c.vault, DEPOSIT_BMTB)).wait();
-    await send("deposit", () => vault.connect(userSigner).deposit(c.bMTB, DEPOSIT_BMTB));
+    // connect() returns BaseContract, so re-assert the typed contract.
+    const userBMTB = bMTB.connect(userSigner) as typeof bMTB;
+    const userVault = vault.connect(userSigner) as typeof vault;
+    await (await userBMTB.approve(c.vault, DEPOSIT_BMTB)).wait();
+    await send("deposit", () => userVault.deposit(c.bMTB, DEPOSIT_BMTB));
     console.log(`deposit         : ${ethers.formatUnits(DEPOSIT_BMTB, 18)} bMTB deposited`);
 
-    await send("borrow", () => vault.connect(userSigner).borrow(BORROW_MUSDC));
+    await send("borrow", () => userVault.borrow(BORROW_MUSDC));
     console.log(`borrow          : ${ethers.formatUnits(BORROW_MUSDC, 6)} mUSDC borrowed`);
   }
 
