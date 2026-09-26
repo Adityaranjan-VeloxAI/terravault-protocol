@@ -4,17 +4,24 @@
  * Standalone ethers v6 agent (run with `npm run agent` / ts-node). Polls the
  * tracked user's on-chain health factor every few seconds and acts:
  *
- *   HF >= WARN (1.20)   → healthy, observe only.
- *   ACT <= HF < WARN    → warn: position deteriorating, arm the buffer.
- *   HF < ACT  (1.10)    → ACT: repay from a CAPPED keeper buffer
- *                         (<= 2000 mUSDC per action, total <= buffer cap) to
- *                         push HF back toward TARGET. Emits real repay txs.
- *   buffer exhausted &   → ESCALATE: pause new borrows on the vault and alert
- *   still unhealthy         (human intervention required).
+ *   HF >= WARN (1.20)       → healthy, observe only.
+ *   ACT <= HF < WARN        → warn: position deteriorating.
+ *   1.0 <= HF < ACT (1.10)  → ACT: repay exactly what brings HF back to TARGET
+ *                             (1.30): debt − collateralValue × liqThreshold / TARGET,
+ *                             in steps capped by the per-action limit, remaining
+ *                             buffer, keeper balance and outstanding debt, until
+ *                             HF >= TARGET or the buffer is empty.
+ *   HF < 1.0                → stand down: the buffer never subsidizes an insolvent
+ *                             position; it is left to liquidators.
  *
- * Safety rails that make this a "responsible" agent:
+ * The buffer is a funded facility: each repay is recorded as owed by the user
+ * plus a premium, and cumulative use persists in deployments/agent-state.json
+ * so a restart cannot refill the cap (`npm run reset` clears it).
+ *
+ * Safety rails:
  *   • Only ever spends the keeper's OWN buffer — never touches user principal.
  *   • Per-action and cumulative spend caps are hard limits.
+ *   • Holds no pause power: running out of buffer never freezes the vault.
  *   • If the oracle circuit breaker is tripped for the collateral, the agent
  *     REFUSES to act: the manipulated price is rejected on-chain, the user is
  *     already protected, and repaying on a fake price would be wrong.
@@ -42,8 +49,12 @@ const RISK_ENGINE_ABI = [
 ];
 const VAULT_ABI = [
   "function repayFor(address user, uint256 amount) external",
-  "function debtOf(address user) external view returns (uint256)",
-  "function pause() external",
+  "function debt(address user) external view returns (uint256)",
+  "function collateral(address user, address asset) external view returns (uint256)",
+  "function collateralAsset(address user) external view returns (address)",
+];
+const REGISTRY_ABI = [
+  "function getConfig(address) view returns (tuple(uint8 tier,uint256 maxLtvBps,uint256 liqThresholdBps,uint256 liqPenaltyBps,uint256 debtCeiling,bool isolation,bool enabled))",
 ];
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) external returns (bool)",
@@ -53,6 +64,7 @@ const ERC20_ABI = [
 const AGGREGATOR_ABI = [
   "function isCircuitBroken(address asset) external view returns (bool)",
   "function isSingleSource(address asset) external view returns (bool)",
+  "function getPrice(address asset) external view returns (uint256, uint256)",
 ];
 
 // --- Config --------------------------------------------------------------
@@ -65,7 +77,24 @@ const MAX_REPAY_PER_ACTION = parseUnits(
   6
 ); // mUSDC 6dp
 const BUFFER_CAP = parseUnits(process.env.AGENT_BUFFER_CAP || "10000", 6);
+const PREMIUM_BPS = BigInt(process.env.AGENT_PREMIUM_BPS || "100"); // facility premium, 1%
 const ONE = parseUnits("1", 18);
+const BPS = 10_000n;
+const STATE_FILE = path.join(__dirname, "..", "deployments", "agent-state.json");
+
+// Cumulative buffer use and what each user owes the facility, persisted so a
+// restart cannot refill the cap.
+type AgentState = { spent: string; owed: Record<string, string> };
+function loadState(): AgentState {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  } catch {
+    return { spent: "0", owed: {} };
+  }
+}
+function saveState(s: AgentState) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2) + "\n");
+}
 
 function loadDeployment() {
   const explicit = process.env.DEPLOYMENTS_FILE;
@@ -135,6 +164,7 @@ async function main() {
   const vault = new Contract(c.vault, VAULT_ABI, wallet);
   const mUSDC = new Contract(c.mUSDC, ERC20_ABI, wallet);
   const aggregator = new Contract(c.aggregator, AGGREGATOR_ABI, wallet);
+  const registry = new Contract(c.registry, REGISTRY_ABI, wallet);
 
   console.log("═".repeat(74));
   console.log("TERRAVAULT — AI Risk Monitor");
@@ -168,8 +198,23 @@ async function main() {
     log("SETUP", `⚠ allowance not set yet (${short(e)}); will retry before the first repay.`);
   }
 
-  let spent = 0n; // cumulative mUSDC deployed from the buffer
-  let paused = false;
+  const state = loadState();
+  log("SETUP", `facility used ${formatUnits(BigInt(state.spent), 6)}/${formatUnits(BUFFER_CAP, 6)} mUSDC (persisted).`);
+
+  // Exact repay that brings HF to TARGET: debt − collateralValue × liqThreshold / TARGET.
+  const repayToTarget = async (): Promise<{ debt: bigint; need: bigint }> => {
+    const asset: string = await vault.collateralAsset(user);
+    const [coll, debt, [price], cfg] = await Promise.all([
+      vault.collateral(user, asset) as Promise<bigint>,
+      vault.debt(user) as Promise<bigint>,
+      aggregator.getPrice(asset) as Promise<[bigint, bigint]>,
+      registry.getConfig(asset),
+    ]);
+    const collValue1e8 = (coll * price) / 10n ** 18n;
+    const weighted1e8 = (collValue1e8 * BigInt(cfg.liqThresholdBps)) / BPS;
+    const targetDebt = (weighted1e8 * ONE) / TARGET_HF / 100n; // 1e8 USD → 6dp mUSDC ($1 peg)
+    return { debt, need: debt > targetDebt ? debt - targetDebt : 0n };
+  };
 
   const tick = async () => {
     // Is the collateral oracle frozen by the circuit breaker?
@@ -215,81 +260,61 @@ async function main() {
       return;
     }
 
-    // --- HF < ACT: intervene -------------------------------------------
-    log("🚨 ACT ", `HF ${hf(currentHf)} below act ${hf(ACT_HF)} — intervening.${sourceNote}`);
-
-    const remainingBuffer = BUFFER_CAP - spent;
-    if (remainingBuffer <= 0n) {
-      return escalate(currentHf);
+    // --- HF < 1.0: insolvent, not ours to subsidize --------------------
+    if (currentHf < ONE) {
+      log(
+        "⛔ HOLD ",
+        `HF ${hf(currentHf)} is below 1.0 — not subsidizing an insolvent position. Left to liquidators.`
+      );
+      return;
     }
 
-    // Buffer is also bounded by the keeper's actual mUSDC balance.
-    let keeperBal = 0n;
-    try {
-      keeperBal = await mUSDC.balanceOf(wallet.address);
-    } catch {
-      /* ignore */
-    }
-
-    // Optionally size to outstanding debt so we never over-repay.
-    let debt: bigint = MaxUint256;
-    try {
-      debt = await vault.debtOf(user);
-    } catch {
-      /* debtOf optional */
-    }
-
-    let amount = MAX_REPAY_PER_ACTION;
-    if (amount > remainingBuffer) amount = remainingBuffer;
-    if (amount > keeperBal) amount = keeperBal;
-    if (debt !== MaxUint256 && amount > debt) amount = debt;
-
-    if (amount <= 0n) {
-      log("🚨 ACT ", "buffer/balance exhausted before any repay was possible.");
-      return escalate(currentHf);
-    }
-
+    // --- 1.0 <= HF < ACT: repay exactly back to TARGET -------------------
+    let first = true;
+    let newHf = currentHf;
     try {
       await ensureAllowance();
-      log("→ REPAY", `repaying ${formatUnits(amount, 6)} mUSDC on behalf of user from buffer…`);
-      const txr = await send(() => vault.repayFor(user, amount, TX));
-      spent += amount;
-      // A read right after the write can hit a node one block behind; wait for the new HF.
-      let newHf: bigint = currentHf;
-      for (let i = 0; i < 4 && newHf === currentHf; i++) {
-        await new Promise((r) => setTimeout(r, 1500));
-        newHf = await riskEngine.getHealthFactor(user);
-      }
+      const { need } = await repayToTarget();
       log(
-        "✓ REPAY",
-        `tx ${txr?.hash ?? ""} | HF ${hf(currentHf)} → ${hf(newHf)} | ` +
-          `buffer used ${formatUnits(spent, 6)}/${formatUnits(BUFFER_CAP, 6)} mUSDC`
+        "🚨 ACT ",
+        `HF ${hf(currentHf)} below act ${hf(ACT_HF)} — ${formatUnits(need, 6)} mUSDC restores ${hf(TARGET_HF)}.${sourceNote}`
       );
-      if (newHf >= TARGET_HF) {
-        log("✓ DONE ", `HF restored above target ${hf(TARGET_HF)}. Standing down.`);
-      } else if (BUFFER_CAP - spent <= 0n && newHf < ACT_HF) {
-        await escalate(newHf);
+      while (newHf < TARGET_HF && newHf >= ONE) {
+        const { debt, need: left } = await repayToTarget();
+        const spent = BigInt(state.spent);
+        const keeperBal: bigint = await mUSDC.balanceOf(wallet.address);
+        let amount = left;
+        if (amount > MAX_REPAY_PER_ACTION) amount = MAX_REPAY_PER_ACTION;
+        if (amount > BUFFER_CAP - spent) amount = BUFFER_CAP - spent;
+        if (amount > keeperBal) amount = keeperBal;
+        if (amount > debt) amount = debt;
+        if (amount <= 0n) {
+          log("⛔ HOLD ", `facility exhausted at HF ${hf(newHf)}; if it falls below 1.0, liquidators take over.`);
+          return;
+        }
+        const before = newHf;
+        const txr = await send(() => vault.repayFor(user, amount, TX));
+        state.spent = (spent + amount).toString();
+        const owed = BigInt(state.owed[user] || "0") + (amount * (BPS + PREMIUM_BPS)) / BPS;
+        state.owed[user] = owed.toString();
+        saveState(state);
+        // A read right after the write can hit a node one block behind; wait for the new HF.
+        for (let i = 0; i < 4 && newHf === before; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          newHf = await riskEngine.getHealthFactor(user);
+        }
+        log(
+          "✓ REPAY",
+          `tx ${txr?.hash ?? ""} | ${formatUnits(amount, 6)} mUSDC | HF ${hf(before)} → ${hf(newHf)} | ` +
+            `facility ${formatUnits(BigInt(state.spent), 6)}/${formatUnits(BUFFER_CAP, 6)}, user owes ${formatUnits(owed, 6)} incl. ${Number(PREMIUM_BPS) / 100}% premium`
+        );
+        first = false;
+      }
+      if (!first && newHf >= TARGET_HF) {
+        log("✓ DONE ", `HF ${hf(newHf)} is at or above target ${hf(TARGET_HF)}. Standing down.`);
       }
     } catch (e) {
       log("✗ REPAY", `repay failed: ${short(e)}`);
-    }
-  };
-
-  const escalate = async (currentHf: bigint) => {
-    if (paused) {
-      log("🚨 ESCALATE", `still unhealthy (HF ${hf(currentHf)}); borrows already paused. ALERT ops.`);
-      return;
-    }
-    log(
-      "🚨 ESCALATE",
-      `buffer exhausted and HF ${hf(currentHf)} still critical — pausing new borrows and alerting ops.`
-    );
-    try {
-      await send(() => vault.pause(TX));
-      paused = true;
-      log("🚨 ESCALATE", "vault borrows PAUSED (PAUSER_ROLE). Human intervention required.");
-    } catch (e) {
-      log("🚨 ESCALATE", `could not pause vault (need PAUSER_ROLE?): ${short(e)}`);
     }
   };
 

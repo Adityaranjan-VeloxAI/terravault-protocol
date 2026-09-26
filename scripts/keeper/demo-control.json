@@ -8,8 +8,8 @@
     "reset": "run `npm run reset` (clears the breaker and restores the position)"
   },
   "bMTB": {
-    "priceA": 1.02,
-    "priceB": 1.02,
+    "priceA": 0.85,
+    "priceB": 0.85,
     "skipA": false,
     "skipB": false
   },

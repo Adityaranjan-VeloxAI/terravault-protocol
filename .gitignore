@@ -11,3 +11,4 @@ coverage.json
 deployments/hardhat.json
 deployments/localhost.json
 deployments/latest.json
+deployments/agent-state.json

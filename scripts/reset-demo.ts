@@ -118,24 +118,18 @@ async function main() {
     console.log("vault           : unpaused");
   }
 
-  // 4. Restore the demo debt to 34,000 mUSDC.
-  if (demoUser.toLowerCase() !== deployer.address.toLowerCase()) {
-    console.log(`⚠  demo user ${demoUser} is not the local signer; skipping debt restore.`);
-  } else {
-    const debt: bigint = await retry(() => vault.debt(demoUser));
-    if (debt < TARGET_DEBT) {
-      const amt = TARGET_DEBT - debt;
-      await send("borrow", () => vault.borrow(amt));
-      console.log(`debt            : borrowed ${ethers.formatUnits(amt, 6)} back → 34,000 mUSDC`);
-    } else if (debt > TARGET_DEBT) {
-      const amt = debt - TARGET_DEBT;
-      await (await mUSDC.approve(c.vault, amt)).wait();
-      await send("repay", () => vault.repay(amt));
-      console.log(`debt            : repaid ${ethers.formatUnits(amt, 6)} → 34,000 mUSDC`);
-    } else {
-      console.log("debt            : already 34,000 mUSDC");
-    }
+  // The agent holds no pause power: running out of buffer must never freeze the vault.
+  const PAUSER_ROLE = await vault.PAUSER_ROLE();
+  if (await retry(() => vault.hasRole(PAUSER_ROLE, keeper))) {
+    await send("revoke PAUSER_ROLE", () => vault.revokeRole(PAUSER_ROLE, keeper));
+    console.log("agent key       : PAUSER_ROLE revoked");
+  }
 
+  // 4. Restore the demo position: 50,000 bMTB collateral first (a liquidation can
+  //    seize all of it, and borrowing needs collateral), then 34,000 mUSDC debt.
+  if (demoUser.toLowerCase() !== deployer.address.toLowerCase()) {
+    console.log(`⚠  demo user ${demoUser} is not the local signer; skipping position restore.`);
+  } else {
     // The live on-stage deposit adds collateral; put it back so the next run's
     // market decline still pushes health below the agent's 1.10 act line.
     const coll: bigint = await retry(() => vault.collateral(demoUser, c.bMTB));
@@ -154,6 +148,20 @@ async function main() {
       console.log("collateral      : 50,000 bMTB");
     }
 
+    const debt: bigint = await retry(() => vault.debt(demoUser));
+    if (debt < TARGET_DEBT) {
+      const amt = TARGET_DEBT - debt;
+      await send("borrow", () => vault.borrow(amt));
+      console.log(`debt            : borrowed ${ethers.formatUnits(amt, 6)} back → 34,000 mUSDC`);
+    } else if (debt > TARGET_DEBT) {
+      const amt = debt - TARGET_DEBT;
+      await (await mUSDC.approve(c.vault, amt)).wait();
+      await send("repay", () => vault.repay(amt));
+      console.log(`debt            : repaid ${ethers.formatUnits(amt, 6)} → 34,000 mUSDC`);
+    } else {
+      console.log("debt            : already 34,000 mUSDC");
+    }
+
     // Stage the live deposit: 1,000 bMTB in the wallet and a standing approval,
     // so the deposit on stage is a single wallet confirmation.
     const walletBMTB: bigint = await retry(() => bMTB.balanceOf(deployer.address));
@@ -167,7 +175,11 @@ async function main() {
     console.log("stage deposit   : 1,000 bMTB in the wallet, vault pre-approved");
   }
 
-  // 5. Refill the agent's repay buffer.
+  // 5. Refill the agent's repay buffer and clear its persisted facility ledger.
+  fs.writeFileSync(
+    path.join(__dirname, "..", "deployments", "agent-state.json"),
+    JSON.stringify({ spent: "0", owed: {} }, null, 2) + "\n"
+  );
   const buf: bigint = await retry(() => mUSDC.balanceOf(keeper));
   if (buf < KEEPER_BUFFER) {
     await send("mint buffer", () => mUSDC.mint(keeper, KEEPER_BUFFER - buf));

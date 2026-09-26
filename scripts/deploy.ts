@@ -157,12 +157,9 @@ async function main() {
   await (await aggregator.grantRole(GUARDIAN_ROLE, keeperAddress)).wait();
   console.log("  GUARDIAN_ROLE -> keeper (adapterA, adapterB, aggregator)  ✓");
 
-  // The risk-monitor agent (keeper key) may pause borrows on escalation.
-  // Grant PAUSER_ROLE + KEEPER_ROLE if the vault defines them; ignore if not.
-  for (const [label, role] of [
-    ["PAUSER_ROLE", PAUSER_ROLE],
-    ["KEEPER_ROLE", KEEPER_ROLE],
-  ] as const) {
+  // The risk-monitor agent (keeper key) gets KEEPER_ROLE only. It holds no pause
+  // power: running out of buffer must never freeze the whole vault.
+  for (const [label, role] of [["KEEPER_ROLE", KEEPER_ROLE]] as const) {
     try {
       await (await (vault as any).grantRole(role, keeperAddress)).wait();
       console.log(`  ${label} -> keeper (vault)                        ✓`);
