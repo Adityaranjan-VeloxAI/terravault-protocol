@@ -29,9 +29,11 @@
                    (ReentrancyGuard, Pausable,          grace-period liquidate; the ONLY
                     AccessControl; only fund mover)      fund-moving contract
 
-  Off-chain (scoped keeper key, no owner god-mode):
-    scripts/keeper/guardian-price-pusher.ts  → pushes feed prices + pokes the aggregator
-    agents/risk-monitor.ts (AI Risk Monitor) → polls HF, auto-repays from a capped buffer, escalates
+  Off-chain:
+    scripts/keeper/guardian-price-pusher.ts  → pushes feed prices + pokes the aggregator (keeper key)
+    agents/risk-monitor.ts (AI Risk Monitor) → polls HF, repays from a capped buffer back to HF 1.30 (keeper key)
+    agents/liquidator.ts (liquidator agent)  → outside bot, own wallet, no protocol role
+    app/ (web app, `npm run app`)            → consumer UI + presenter controls; runs the three processes above
 ```
 
 **Data flow:** keeper pushes prices into the two `GuardianOracleAdapter`s → `OracleAggregator.poke()` drops stale feeds, runs the deviation/circuit-breaker check, and stores a last-good price → `RiskEngine` reads that price (only through the aggregator) and computes health factor and borrow/liquidation eligibility → `CollateralVault` executes fund movements gated by the `RiskEngine`, with an independent circuit-breaker guard on `borrow()` and `liquidate()`.
@@ -87,37 +89,58 @@ npm run deploy:local
 npm run seed:local
 ```
 
-Deploy wires scoped `AccessControl` roles (no owner god-mode): the keeper key receives `GUARDIAN_ROLE` on both adapters and the aggregator, plus `PAUSER_ROLE` and `KEEPER_ROLE` on the vault. Addresses are written to `deployments/<network>.json` and `deployments/latest.json`, which the off-chain scripts read.
+Deploy wires scoped `AccessControl` roles (no owner god-mode): the keeper key receives `GUARDIAN_ROLE` on both adapters and the aggregator, plus `KEEPER_ROLE` on the vault. It does not get `PAUSER_ROLE` (it was revoked on the live testnet deployment, and `npm run reset` revokes it again if present), so the agent can't freeze the vault. Addresses are written to `deployments/<network>.json` and `deployments/latest.json`, which the off-chain scripts read.
 
-## Run the demo end-to-end
+## Run the demo
 
-After `deploy` + `seed`, run the keeper and the agent in two terminals (one of each; they share the keeper key):
+The demo is a web app. After `deploy` + `seed`:
 
 ```bash
-npm run keeper           # scripts/keeper/guardian-price-pusher.ts — pushes bMTB prices + pokes the aggregator each tick
-npm run agent            # agents/risk-monitor.ts — AI Risk Monitor: polls HF, auto-repays from the capped buffer
-npm run try-liquidate    # attempts to liquidate the demo user (static call, no gas) and shows the result
-npm run reset            # back to the opening state: breaker cleared, debt 34,000, buffer refilled, HF 1.275
+npm run app              # http://localhost:3000
 ```
 
-Stage scenarios by editing **`scripts/keeper/demo-control.json`** (reloaded by the keeper each tick). Run them in this order, because the breaker is manual and stays tripped after the attack:
+`app/server.js` serves the page and starts three child processes: the price keeper, the AI risk monitor (~15s later) and the liquidator agent (~17s later). Their logs print in the same terminal. The page reads HashKey Testnet directly.
 
-1. **DECLINE**: set both `bMTB.priceA` and `bMTB.priceB` to `0.85` (feeds agree). The price is accepted and HF falls to 1.063, below the 1.10 act line, so the agent repays 2,000 mUSDC from its capped buffer and HF recovers to 1.129.
-2. **ATTACK**: set `bMTB.priceB = 0.51` with A still at 0.85. Deviation is 4,000 bps (40%) against a 500 bps limit, so the breaker trips, the last-good price is kept, and `getPrice`/`borrow`/`liquidate` revert for bMTB. The user is **not** liquidated, and the agent stands down. `npm run try-liquidate` shows `cannot liquidate on frozen price`.
-3. **STALE** (covered by the e2e test; takes `maxStaleness` = 90s live): set `bMTB.skipB = true`. Once adapter B's price ages out, the aggregator falls to a single source and the registry caps effective LTV to the 45% tier-3 floor.
+- **Position** card: health factor, collateral, debt, liquidation price, borrow limit used.
+- **Manage** card: deposit / borrow / repay / withdraw through MetaMask. It switches to (or adds) HashKey Testnet, chainId 133, and can mint 10,000 test bMTB.
+- **Oracle shield**: both feeds, how far apart they are against the 5% limit, and the frozen state.
+- **AI guardian**: the risk monitor's and the liquidator's live reasoning, and an on-chain activity feed with explorer links.
+- **Presenter bar** (only when served by `npm run app`): **Market decline** (both feeds $0.85), **Oracle attack** (feed B $0.51, 40% below the honest $0.85), **Try liquidation** (static call, no gas), **Crash** (both feeds $0.70), **Reset demo**.
 
-Then `npm run reset` and restart the agent before the next run. All of this has been rehearsed end-to-end on HashKey Testnet.
+The presenter buttons write prices into `scripts/keeper/demo-control.json`; the keeper pushes them on its next tick (up to ~15s). The market moves are staged; what happens after (breaker, health factor, repays, flags, reverts) is real contract behaviour on testnet.
 
-The full timed script (what to click, what to say, presenter split, and the testnet-down backup) is in [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md). The Q&A brief and glossary are in [`docs/DEMO_BRIEF.md`](docs/DEMO_BRIEF.md).
+A public static copy with no presenter bar is at https://terravault-adityaranjan-veloxais-projects.vercel.app. It is only reachable after Vercel Authentication is turned off in the project settings.
 
-### Demo numbers (must reproduce exactly)
+What to expect:
 
-- Deposit **50,000 bMTB** @ **$1.02** = **$51,000** collateral value.
-- Borrow **34,000 mUSDC**.
-- Health factor = (51,000 × 0.85) / 34,000 = **1.275**.
-- Attack (run after the decline, feed A at $0.85) pushes feed B to **$0.51** → deviation ≈ **4000 bps** (40%) vs a **500 bps** (5%) limit → **breaker trips**.
+1. **Market decline.** Feeds agree at $0.85, the price is accepted. On the seeded position HF falls to 1.063. The risk monitor repays exactly `debt − collateralValue × liqThreshold / 1.30` in steps of at most 2,000 mUSDC: verified on testnet, 6,211.54 mUSDC in four repays, HF 1.063 → 1.300. It records what the user owes the facility (spent + 1% premium) in `deployments/agent-state.json`.
+2. **Oracle attack** (after the decline). 4,000 bps deviation against a 500 bps limit: the breaker trips, the last-good $0.85 is kept, borrows and liquidations revert. Both agents stand down. **Try liquidation** returns `cannot liquidate on frozen price`.
+3. **Crash** (from a fresh Reset only; the breaker stays tripped after an attack). HF 0.875. The risk monitor stands down (it never repays below HF 1.0). The liquidator quotes repay 34,000 mUSDC, receive 50,000 bMTB (the 5% bonus is capped by the collateral, ~2.9% effective, +$1,000), flags the position, waits the 300s grace period, seizes if still profitable, and verifies on-chain. Verified on testnet through the flag.
+4. **Reset demo** (~20–60s): steady prices, breaker cleared, collateral back to 50,000 then debt to 34,000, 1,000 bMTB staged in the deployer wallet for a live deposit, facility ledger cleared, keeper buffer refilled to 10,000 mUSDC, `PAUSER_ROLE` revoked from the agent key if present, risk monitor restarted.
+
+The processes also run on their own:
+
+```bash
+npm run keeper           # price pusher, reads scripts/keeper/demo-control.json each tick
+npm run agent            # AI risk monitor
+npm run liquidator       # liquidator agent (key from LIQUIDATOR_PRIVATE_KEY, or generated into deployments/liquidator-wallet.json)
+npm run reset            # back to the opening state (HF 1.275)
+npm run try-liquidate    # static liquidate() call against the demo user
+```
+
+Run only one keeper and one agent at a time; they share the keeper key. `npm run app` already runs them.
+
+The timed 3-minute script (what to click, what appears, what to say, presenter split, backup) is in [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md). The Q&A brief is in [`docs/DEMO_BRIEF.md`](docs/DEMO_BRIEF.md). If testnet is down: `npx hardhat test test/e2e-demo-flow.test.ts` runs the same contracts through the same beats on a local chain.
+
+### Demo numbers
+
+- Seeded position: **50,000 bMTB** @ **$1.02** = **$51,000** collateral, **34,000 mUSDC** debt, HF = (51,000 × 0.85) / 34,000 = **1.275**.
 - bMTB Tier 1: maxLtv **8000**, liqThreshold **8500**, liqPenalty **500**, grace period **300s**.
-- Agent thresholds: warn **1.20**, act **1.10**, target **1.30**; repay ≤ **2,000 mUSDC/action**, buffer cap **10,000 mUSDC**.
+- Decline to **$0.85**: HF **1.063**; agent repays **6,211.54** mUSDC in four steps to HF **1.300**.
+- Attack: feed B **$0.51** vs feed A **$0.85** → deviation **4000 bps** vs a **500 bps** limit → breaker trips.
+- Crash to **$0.70**: HF **0.875**; full liquidation repays 34,000 and seizes all 50,000 bMTB (+$1,000). Below **~$0.68** a full liquidation is unprofitable.
+- Agent: warn **1.20**, act **1.10**, target **1.30**; ≤ **2,000 mUSDC/action**; buffer cap **10,000 mUSDC**; **1%** facility premium.
+- With the on-stage deposit and borrow of 1,000 each (51,000 bMTB, 35,000 debt): HF 1.263 before the decline, ~1.053 after it, ~6,656 mUSDC repaid to reach 1.300.
 
 ## Deployed addresses — HashKey Testnet (chainId 133)
 
@@ -141,26 +164,34 @@ Block explorer (Blockscout): `https://hashkeychain-testnet-explorer.alt.technolo
 
 ## What's mocked vs real (honest accounting)
 
-**Real (shipped, compiled, tested in this repo):**
+**Real (shipped, compiled, tested in this repo, running on HashKey Testnet):**
 - All nine Solidity contracts, compiled under Solidity 0.8.24 (`viaIR`).
 - The circuit-breaker / deviation / staleness / single-source logic in `OracleAggregator`, and the guarded `getPrice` read path.
 - Health-factor math, borrow/liquidation gating, and dynamic (single-source-aware) LTV in `RiskEngine` + `AssetQualityRegistry`.
 - Reentrancy-guarded, pausable, role-gated fund flows and grace-period soft liquidation in `CollateralVault`.
-- The off-chain keeper (price pusher) and the AI Risk Monitor agent, both signing with a scoped keeper key.
+- The web app's reads and writes: every number on the page comes from the chain, and deposit / borrow / repay / withdraw are real MetaMask transactions.
+- The off-chain processes: the keeper (price pusher) and the risk monitor sign with the keeper key; the liquidator agent signs with its own key and holds no protocol role.
 - Tests: `test/OracleAggregator.test.ts`, `test/e2e-demo-flow.test.ts`.
 
 **Mocked / demo-scoped:**
-- `bMTB` and `mUSDC` are mock ERC-20s with public `mint`; there is no real tokenized T-bill, issuer, or custodian.
-- Both price feeds are `GuardianOracleAdapter`s pushed by **one keeper key** — so *source independence does not exist as deployed.* The demo proves the breaker mechanism, not Byzantine independence. Production requires genuinely independent providers (issuer NAV oracle + Chainlink) behind a multisig.
+- The market. Price moves come from the presenter bar (or `demo-control.json`); there is no real price source.
+- Both price feeds are `GuardianOracleAdapter`s pushed by **one keeper key**, so *source independence does not exist as deployed.* The demo proves the breaker mechanism, not independent sources. Production needs genuinely independent providers (issuer NAV oracle + Chainlink) behind a multisig.
+- `bMTB` and `mUSDC` are mock ERC-20s with public `mint`; there is no real tokenized T-bill, issuer, or custodian. The liquidator mints its own mUSDC to repay debt, and its gas is topped up from the deployer.
+- The agent's facility ledger (buffer used, and what each user owes including the 1% premium) is a local JSON file, `deployments/agent-state.json`. Nothing on-chain records or collects that debt, and `npm run reset` clears it.
+- The "AI" risk monitor is deterministic threshold policy, not a trained model.
 - `ComplianceGate` is an allowlist PoC, not a full ERC-3643 identity registry; issuer credit, custody, and legal enforceability are off-chain and unmodeled.
-- The "AI" agent is deterministic threshold policy with a model-ready seam, not a trained model.
+- The Vercel copy is static: no presenter bar and no agent reasoning, only what the chain shows.
 
-**Known limitations we own (not defended — see `docs/DEMO_BRIEF.md` §5):**
-- The breaker can't distinguish manipulation from a real crash or feed-latency skew (single-block, full-range deviation; no sustained-deviation gate).
-- Single-source mode caps only *new* borrows; existing positions still run on the lone feed, and liquidations remain live. Fix: suspend seizure in single-source mode.
-- `unhealthySince` is not reset on a price-driven recovery, which can defeat the grace period on a later dip.
-- Liquidation is unprofitable once a position is underwater (full-repay, collateral-capped seize, no partial liquidation); a reserve / Dutch-auction backstop is needed.
-- The keeper key holds price-authorship, `clearBreaker`, and `pause` together; production must separate these and decentralize the guardian.
+**Known limitations on main (a `liquidation-v2` branch addressing the liquidation items is in progress, not merged):**
+- Liquidation repays the **full debt**; there is no partial close.
+- There is **no reserve for bad debt**. Because the seize is capped at the borrower's collateral, a full liquidation of the seeded loan is unprofitable below ~$0.68, and nobody will run it.
+- `unhealthySince` is **not cleared on price recovery**. `liquidate()` tries to clear it when the position is healthy, but then reverts `not liquidatable`, which rolls the clear back. Only a repay (at HF ≥ 1.0) or a completed liquidation clears it, so a position that dipped and recovered skips the grace period on its next dip.
+- There is **no on-chain quote function**; the liquidator computes its quote off-chain from the vault, aggregator and registry.
+- The breaker can't tell manipulation from a real crash or feed-latency skew (single-poke, full-range deviation; no sustained-deviation gate).
+- Single-source mode caps only *new* borrows; existing positions still run on the lone feed, and liquidations remain live.
+- The keeper key holds price authorship for both feeds and `clearBreaker` together; production must separate these and decentralize the guardian. (It no longer holds `PAUSER_ROLE`.)
+
+More detail and the planned fixes: `docs/DEMO_BRIEF.md` §4–5.
 
 ## License
 
