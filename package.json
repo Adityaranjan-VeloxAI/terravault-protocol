@@ -5,6 +5,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
+    "app": "node app/server.js",
     "compile": "hardhat compile",
     "test": "hardhat test",
     "clean": "hardhat clean",

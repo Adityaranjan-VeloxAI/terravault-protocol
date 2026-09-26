@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terravault</title>
+<meta name="description" content="Borrow stablecoins against tokenized T-bills on HashKey Chain, protected by a manipulation-resistant oracle and an AI risk guardian.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0B0E14;
+    --surface: #141a24;
+    --surface-2: #1b2330;
+    --surface-3: #222c3c;
+    --border: #2a3546;
+    --border-soft: #212a38;
+    --ink: #e7ecf5;
+    --muted: #8b96ab;
+    --faint: #5f6a7e;
+    --accent: #7c8dff;
+    --accent-soft: rgba(124,141,255,0.14);
+    --good: #3fd8a4;
+    --good-soft: rgba(63,216,164,0.13);
+    --warn: #f5b13f;
+    --warn-soft: rgba(245,177,63,0.14);
+    --crit: #ff6b6b;
+    --crit-soft: rgba(255,107,107,0.14);
+    --shadow: 0 1px 0 rgba(255,255,255,0.02), 0 8px 30px rgba(0,0,0,0.35);
+    --r: 14px;
+    --r-sm: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; padding-bottom: 90px; }
+  .mono, .num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 18px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font-family: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* header */
+  header.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border-soft); }
+  .bar-in { display: flex; align-items: center; gap: 12px; padding-block: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
+  .logo { width: 32px; height: 32px; border-radius: 9px; flex: none; background: linear-gradient(150deg, var(--accent), #b06dff); display: grid; place-items: center; color: #fff; font: 700 17px "Sora", sans-serif; box-shadow: 0 4px 14px var(--accent-soft); }
+  .brand h1 { font: 700 17px "Sora", sans-serif; margin: 0; letter-spacing: -0.01em; }
+  .brand .sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+  .dot.live { animation: pulse 2s infinite; }
+  .dot.off { background: var(--crit); box-shadow: 0 0 0 3px var(--crit-soft); animation: none; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); border-radius: var(--r-sm); padding: 9px 14px; font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px; transition: background .15s, border-color .15s; white-space: nowrap; }
+  .btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #0B0E14; font-weight: 600; }
+  .btn.primary:hover:not(:disabled) { background: #93a1ff; }
+  .btn.sm { padding: 6px 10px; font-size: 12px; }
+  .btn.link { background: none; border: none; color: var(--accent); padding: 0; }
+  .hide-sm { }
+  @media (max-width: 640px) { .hide-sm { display: none; } }
+
+  /* hero */
+  .hero { padding-block: 26px 6px; }
+  .hero h2 { font: 600 clamp(22px, 3.6vw, 30px) "Sora", sans-serif; margin: 0 0 8px; letter-spacing: -0.02em; text-wrap: balance; }
+  .hero p { margin: 0; color: var(--muted); max-width: 64ch; }
+
+  /* layout */
+  .grid { display: grid; grid-template-columns: 1.45fr 1fr; gap: 16px; padding-block: 18px 30px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
+  .card-h { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border-soft); flex-wrap: wrap; }
+  .card-h h3 { margin: 0; font: 600 14px "Sora", sans-serif; }
+  .eyebrow { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .card-h .right { margin-left: auto; }
+  .card-b { padding: 16px; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+  .pill .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.good { color: var(--good); background: var(--good-soft); }
+  .pill.warn { color: var(--warn); background: var(--warn-soft); }
+  .pill.crit { color: var(--crit); background: var(--crit-soft); }
+  .pill.acc { color: var(--accent); background: var(--accent-soft); }
+  .pill.mut { color: var(--muted); background: var(--surface-2); }
+
+  /* position */
+  .pos { display: grid; grid-template-columns: 200px 1fr; gap: 20px; align-items: center; }
+  @media (max-width: 560px) { .pos { grid-template-columns: 1fr; justify-items: center; } }
+  .gauge { position: relative; width: 200px; height: 124px; }
+  .gauge .hf { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+  .gauge .hf b { font: 600 36px "IBM Plex Mono", monospace; line-height: 1; letter-spacing: -0.02em; }
+  .gauge .hf span { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .gcap { font-size: 11px; color: var(--faint); text-align: center; margin-top: 6px; }
+  .stats { display: flex; flex-direction: column; min-width: 0; width: 100%; }
+  .kv { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--border-soft); }
+  .kv .k { color: var(--muted); font-size: 12.5px; }
+  .kv .v { font: 500 14px "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; text-align: right; }
+  .kv .v small { display: block; color: var(--faint); font-size: 11px; font-weight: 400; }
+  .bar2 { height: 7px; border-radius: 99px; background: var(--surface-3); overflow: hidden; margin: 10px 0 4px; }
+  .bar2 > i { display: block; height: 100%; border-radius: 99px; transition: width .5s ease, background .3s; }
+  .note { margin-top: 14px; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; border: 1px solid transparent; }
+  .note.acc { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .note.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .note.crit { background: var(--crit-soft); border-color: color-mix(in srgb, var(--crit) 30%, transparent); }
+  .note.good { background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 30%, transparent); }
+
+  /* actions */
+  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
+  .tabs button { background: none; border: none; color: var(--muted); padding: 8px 4px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 500; }
+  .tabs button[aria-selected="true"] { background: var(--surface-3); color: var(--ink); }
+  .field { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px 6px 14px; }
+  .field:focus-within { border-color: var(--accent); }
+  .field input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--ink); font: 500 20px "IBM Plex Mono", monospace; padding: 6px 0; }
+  .field .unit { color: var(--muted); font-size: 13px; font-weight: 600; }
+  .meta { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); margin: 8px 2px 14px; flex-wrap: wrap; }
+  .act-go { width: 100%; padding: 12px; font-size: 14px; }
+  .wallet-line { margin-top: 12px; font-size: 12px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .wallet-line b { color: var(--muted); font-weight: 500; }
+  .empty { text-align: center; padding: 14px 6px; color: var(--muted); }
+  .empty p { margin: 0 0 12px; }
+
+  /* shield */
+  .banner { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border-radius: 11px; margin-bottom: 14px; }
+  .banner .ic { font-size: 20px; line-height: 1.2; }
+  .banner b { display: block; font: 600 14px "Sora", sans-serif; margin-bottom: 2px; }
+  .banner span { font-size: 12.5px; color: var(--muted); }
+  .banner.good { background: var(--good-soft); } .banner.good b { color: var(--good); }
+  .banner.crit { background: var(--crit-soft); } .banner.crit b { color: var(--crit); }
+  .banner.warn { background: var(--warn-soft); } .banner.warn b { color: var(--warn); }
+  .feed { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px dashed var(--border-soft); }
+  .feed .tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); letter-spacing: .04em; }
+  .feed .nm { font-size: 13px; font-weight: 500; }
+  .feed .nm small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+  .feed .px { font: 500 14px "IBM Plex Mono", monospace; text-align: right; }
+  .feed .px small { display: block; font-size: 10.5px; color: var(--faint); }
+  .feed .px.bad { color: var(--crit); }
+  .devrow { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .devbar { position: relative; height: 7px; border-radius: 99px; background: var(--surface-3); margin-top: 6px; overflow: hidden; }
+  .devbar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; transition: width .5s, background .3s; }
+  .devbar .lim { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); opacity: .55; }
+  .used { display: flex; justify-content: space-between; align-items: baseline; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+  .used .big { font: 600 22px "IBM Plex Mono", monospace; }
+  .explain { font-size: 11.5px; color: var(--faint); margin-top: 10px; line-height: 1.5; }
+
+  /* ai */
+  .policy { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .policy span { font-size: 11px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 9px; }
+  .think { background: #0d1219; border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px 10px; margin-bottom: 12px; font: 11.5px/1.55 "IBM Plex Mono", monospace; }
+  .think .h { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; font-family: "IBM Plex Sans", sans-serif; font-weight: 600; }
+  .think .ln { display: flex; gap: 8px; color: var(--muted); }
+  .think .ln:last-child { color: var(--ink); }
+  .think .ln .t { color: var(--faint); flex: none; }
+  .acts { display: flex; flex-direction: column; }
+  .act { display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+  .act:last-child { border-bottom: 0; }
+  .act .ic { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; background: var(--surface-2); }
+  .act.ai .ic { background: var(--good-soft); }
+  .act.shield .ic { background: var(--crit-soft); }
+  .act.ok .ic { background: var(--accent-soft); }
+  .act b { font-weight: 600; font-size: 13px; display: block; }
+  .act p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .act .when { font-size: 11px; color: var(--faint); margin-top: 3px; }
+  .muted { color: var(--muted); }
+
+  /* presenter */
+  #presenter { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: color-mix(in srgb, #0d1219 94%, transparent); backdrop-filter: blur(10px); border-top: 1px dashed var(--border); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .pres-in { display: flex; align-items: center; gap: 10px; padding-block: 10px; flex-wrap: wrap; }
+  .pres-in .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); font-weight: 700; margin-right: 4px; }
+  .pres-in .btn.on { border-color: var(--accent); background: var(--accent-soft); }
+  .pres-in .svc { margin-left: auto; display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); align-items: center; }
+  .pres-in .svc span { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* toasts */
+  #toasts { position: fixed; right: 16px; bottom: 84px; z-index: 40; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+  .toast { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; box-shadow: var(--shadow); animation: tin .2s ease; }
+  .toast.good { border-left-color: var(--good); }
+  .toast.crit { border-left-color: var(--crit); }
+  .toast a { display: inline-block; margin-top: 3px; font-size: 11.5px; }
+  @keyframes tin { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <div class="brand">
+      <div class="logo">T</div>
+      <div style="min-width:0">
+        <h1>Terravault</h1>
+        <div class="sub">Borrow against tokenized T-bills</div>
+      </div>
+    </div>
+    <span class="chip hide-sm" id="netChip"><span class="dot live" id="netDot"></span><span id="netText">HashKey Testnet</span></span>
+    <button class="btn primary" id="connectBtn">Connect wallet</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <h2>Your T-bills keep earning. You get cash to spend.</h2>
+    <p>Deposit tokenized Treasury bills, borrow stablecoins against them. Two independent price feeds and an AI guardian stand between you and a bad liquidation.</p>
+  </section>
+
+  <div class="grid">
+    <div class="col">
+      <section class="card" aria-labelledby="posTitle">
+        <div class="card-h">
+          <span class="eyebrow">Position</span>
+          <h3 id="posTitle">Demo account</h3>
+          <span class="right pill mut" id="posPill"><span class="d"></span>Loading</span>
+        </div>
+        <div class="card-b">
+          <div class="pos">
+            <div>
+              <div class="gauge">
+                <svg viewBox="0 0 200 124" width="200" height="124" aria-hidden="true">
+                  <path id="gBg" fill="none" stroke="var(--surface-3)" stroke-width="14" stroke-linecap="round"/>
+                  <path id="gVal" fill="none" stroke="var(--good)" stroke-width="14" stroke-linecap="round"/>
+                  <line id="gTick" stroke="var(--ink)" stroke-width="2" opacity="0.55"/>
+                </svg>
+                <div class="hf"><b id="hfVal">–</b><span>Health factor</span></div>
+              </div>
+              <div class="gcap mono">liquidation below <b style="color:var(--warn)">1.00</b></div>
+            </div>
+            <div class="stats">
+              <div class="kv"><span class="k">Collateral</span><span class="v" id="sColl">–</span></div>
+              <div class="kv"><span class="k">Borrowed</span><span class="v" id="sDebt">–</span></div>
+              <div class="kv"><span class="k">Liquidation price</span><span class="v" id="sLiq">–</span></div>
+              <div class="kv" style="border-bottom:0;padding-bottom:0"><span class="k">Borrow limit used</span><span class="v" id="sUsed">–</span></div>
+              <div class="bar2"><i id="usedBar" style="width:0"></i></div>
+            </div>
+          </div>
+          <div class="note" id="posNote" hidden></div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="actTitle">
+        <div class="card-h">
+          <span class="eyebrow">Manage</span>
+          <h3 id="actTitle">Deposit &amp; borrow</h3>
+          <span class="right" id="viewSwitch"></span>
+        </div>
+        <div class="card-b" id="actBody"></div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="card" aria-labelledby="shTitle">
+        <div class="card-h">
+          <span class="eyebrow">Oracle shield</span>
+          <h3 id="shTitle">Price protection</h3>
+        </div>
+        <div class="card-b">
+          <div class="banner good" id="shBanner"><span class="ic">✓</span><div><b>Loading…</b><span></span></div></div>
+          <div class="feed">
+            <span class="tag">FEED A</span>
+            <span class="nm">Pull oracle<small>RedStone-style signed price</small></span>
+            <span class="px" id="fA">–<small>–</small></span>
+          </div>
+          <div class="feed">
+            <span class="tag">FEED B</span>
+            <span class="nm">Guardian feed<small>keeper-pushed, role-gated</small></span>
+            <span class="px" id="fB">–<small>–</small></span>
+          </div>
+          <div class="devrow"><span>How far apart the feeds are</span><span class="mono" id="devTxt">–</span></div>
+          <div class="devbar"><i id="devBar" style="width:0"></i><span class="lim" id="devLim"></span></div>
+          <div class="used">
+            <span class="muted" style="font-size:12.5px">Price your loan uses</span>
+            <span class="big" id="usedPx">–</span>
+          </div>
+          <div class="explain">If the feeds disagree by more than <b>5%</b>, Terravault freezes on the last honest price. Borrowing and liquidations pause until a guardian reviews, so a manipulated feed can't liquidate you.</div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="aiTitle">
+        <div class="card-h">
+          <span class="eyebrow">AI guardian</span>
+          <h3 id="aiTitle">Risk Monitor</h3>
+          <span class="right pill good" id="aiPill"><span class="d"></span>Watching</span>
+        </div>
+        <div class="card-b">
+          <div class="policy">
+            <span>Steps in below health 1.10</span>
+            <span>Up to 2,000 mUSDC per action</span>
+            <span>Repay-only: can't touch your collateral</span>
+          </div>
+          <div class="think" id="think" hidden><div class="h">Live reasoning</div><div id="thinkLines"></div></div>
+          <div class="acts" id="acts"><div class="muted" style="font-size:12.5px">Loading activity…</div></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<div id="presenter" hidden>
+  <div class="wrap pres-in">
+    <span class="lbl">Presenter</span>
+    <button class="btn sm" data-scn="decline">📉 Market decline</button>
+    <button class="btn sm" data-scn="attack">⚡ Oracle attack</button>
+    <button class="btn sm" id="resetBtn">↺ Reset demo</button>
+    <span class="svc" id="svc"></span>
+  </div>
+</div>
+<div id="toasts" aria-live="polite"></div>
+
+<script src="vendor/ethers.umd.min.js"></script>
+<script>window.ethers || document.write('<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"><\/script>');</script>
+<script>
+(function () {
+  "use strict";
+  const { ethers } = window;
+
+  // ---- deployment (HashKey Testnet, see deployments/hashkeyTestnet.json) ----
+  const CFG = {
+    chainId: 133,
+    chainHex: "0x85",
+    rpc: "https://testnet.hsk.xyz",
+    explorer: "https://hashkeychain-testnet-explorer.alt.technology",
+    demoUser: "0x856df6369Cb732FEdb768AdBE253B02fbA7fE2FB",
+    keeper: "0xf7B09Cc2E1b994Dd4296C632B729515E6682BA29",
+    c: {
+      bMTB: "0x2D9dc2776C9cd2c9c68BaD7C86577CBB7388BC0E",
+      mUSDC: "0x2fC4DA60C9B43881a4a1e752DC5e7aFE2e91993C",
+      adapterA: "0x126f835dA5Bed8B147708c0912BfD570D203817A",
+      adapterB: "0x8d6C9878ce0BE6b1775695303B1F3b0Aea3fe400",
+      aggregator: "0xe932f559332aA604cE683e66Db91E006223Fc9B2",
+      registry: "0x1F7f82ef0F12a647cF5116E9E71C3eb07DaCCe34",
+      vault: "0xA025bb7981D50130d6F0F0e77c19cB283e18e472",
+    },
+  };
+
+  const ABI = {
+    erc20: [
+      "function balanceOf(address) view returns (uint256)",
+      "function allowance(address,address) view returns (uint256)",
+      "function approve(address,uint256) returns (bool)",
+      "function mint(address,uint256)",
+    ],
+    adapter: ["function getPrice(address) view returns (uint256,uint256)"],
+    agg: [
+      "function getAssetOracle(address) view returns (address[],uint256,uint256,bool,uint256,uint256,bool,bool)",
+      "event CircuitBreakerTripped(address indexed asset, uint256 deviationBps)",
+      "event BreakerCleared(address indexed asset)",
+    ],
+    registry: [
+      "function getConfig(address) view returns (tuple(uint8 tier,uint256 maxLtvBps,uint256 liqThresholdBps,uint256 liqPenaltyBps,uint256 debtCeiling,bool isolation,bool enabled))",
+      "function effectiveMaxLtv(address) view returns (uint256)",
+    ],
+    vault: [
+      "function collateral(address,address) view returns (uint256)",
+      "function debt(address) view returns (uint256)",
+      "function paused() view returns (bool)",
+      "function poolLiquidity() view returns (uint256)",
+      "function deposit(address,uint256)",
+      "function withdraw(address,uint256)",
+      "function borrow(uint256)",
+      "function repay(uint256)",
+      "event Deposit(address indexed user, address indexed asset, uint256 amount)",
+      "event Withdraw(address indexed user, address indexed asset, uint256 amount)",
+      "event Borrow(address indexed user, address indexed asset, uint256 amount)",
+      "event Repay(address indexed payer, address indexed user, uint256 amount)",
+      "event LiquidationFlagged(address indexed user, address indexed asset, uint256 since)",
+      "event Liquidated(address indexed user, address indexed liquidator, address indexed asset, uint256 debtRepaid, uint256 collateralSeized, uint256 penaltyBps)",
+      "event Paused(address account)",
+      "event Unpaused(address account)",
+    ],
+  };
+
+  const rp = new ethers.JsonRpcProvider(CFG.rpc, CFG.chainId, { staticNetwork: true, batchMaxCount: 1 });
+  const R = {
+    agg: new ethers.Contract(CFG.c.aggregator, ABI.agg, rp),
+    adA: new ethers.Contract(CFG.c.adapterA, ABI.adapter, rp),
+    adB: new ethers.Contract(CFG.c.adapterB, ABI.adapter, rp),
+    reg: new ethers.Contract(CFG.c.registry, ABI.registry, rp),
+    vault: new ethers.Contract(CFG.c.vault, ABI.vault, rp),
+    bmtb: new ethers.Contract(CFG.c.bMTB, ABI.erc20, rp),
+    usdc: new ethers.Contract(CFG.c.mUSDC, ABI.erc20, rp),
+  };
+  const IFACE = { vault: new ethers.Interface(ABI.vault), agg: new ethers.Interface(ABI.agg) };
+
+  const S = {
+    account: null, chainOk: false, view: "demo",
+    block: 0, cfg: null, snap: null, wal: null,
+    feed: [], logBlock: 0, tsCache: {},
+    agentLines: [], agentSince: 0,
+    api: false, status: null, tab: "deposit", busy: false, amount: "",
+  };
+  const viewed = () => (S.view === "wallet" && S.account ? S.account : CFG.demoUser);
+  const $ = (s) => document.querySelector(s);
+  const eq = (a, b) => a && b && a.toLowerCase() === b.toLowerCase();
+
+  // ---- formatting ------------------------------------------------------------
+  const fmt = (n, d = 0) => Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const usd = (n, d = 0) => "$" + fmt(n, d);
+  const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+  const u6 = (x) => fmt(Number(ethers.formatUnits(x, 6)), 0);
+  const u18 = (x) => fmt(Number(ethers.formatUnits(x, 18)), 0);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  function ago(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + "s ago";
+    if (sec < 3600) return Math.floor(sec / 60) + "m ago";
+    return Math.floor(sec / 3600) + "h ago";
+  }
+  const txLink = (h) => `<a href="${CFG.explorer}/tx/${h}" target="_blank" rel="noopener">view on explorer ↗</a>`;
+
+  // ---- chain snapshot ----------------------------------------------------------
+  async function poll() {
+    try {
+      const b = await rp.getBlockNumber();
+      if (b < S.block) return; // a load-balanced RPC node that is behind; keep the newer view
+      const at = { blockTag: b };
+      const u = viewed();
+      const [blk, ora, pa, pb, coll, debt, effLtv, paused, pool] = await Promise.all([
+        rp.getBlock(b).catch(() => null),
+        R.agg.getAssetOracle(CFG.c.bMTB, at),
+        R.adA.getPrice(CFG.c.bMTB, at).catch(() => null),
+        R.adB.getPrice(CFG.c.bMTB, at).catch(() => null),
+        R.vault.collateral(u, CFG.c.bMTB, at),
+        R.vault.debt(u, at),
+        R.reg.effectiveMaxLtv(CFG.c.bMTB, at),
+        R.vault.paused(at),
+        R.vault.poolLiquidity(at),
+      ]);
+      if (!S.cfg) S.cfg = await R.reg.getConfig(CFG.c.bMTB);
+      if (S.account) {
+        const [wb, wu, wh] = await Promise.all([
+          R.bmtb.balanceOf(S.account, at),
+          R.usdc.balanceOf(S.account, at),
+          rp.getBalance(S.account, b),
+        ]);
+        S.wal = { bmtb: wb, usdc: wu, hsk: wh };
+      }
+      S.block = b;
+      const now = blk ? Number(blk.timestamp) : Math.floor(Date.now() / 1000);
+      S.snap = { now, ora, pa, pb, coll, debt, effLtv, paused, pool, user: u };
+      setLive(true);
+      render();
+    } catch (e) {
+      setLive(false);
+    }
+  }
+
+  function model() {
+    const s = S.snap, cfg = S.cfg;
+    const price = Number(s.ora[4]) / 1e8;
+    const broken = s.ora[3], single = s.ora[6];
+    const stale = !broken && s.now - Number(s.ora[5]) > Number(s.ora[1]);
+    const coll = Number(ethers.formatUnits(s.coll, 18));
+    const debt = Number(ethers.formatUnits(s.debt, 6));
+    const liq = Number(cfg.liqThresholdBps) / 1e4;
+    const ltv = Number(s.effLtv) / 1e4;
+    const collValue = coll * price;
+    const hf = debt > 0 ? (collValue * liq) / debt : Infinity;
+    const limit = collValue * ltv;
+    const feed = (p) => (p ? { p: Number(p[0]) / 1e8, age: s.now - Number(p[1]) } : null);
+    const fA = feed(s.pa), fB = feed(s.pb);
+    const dev = fA && fB ? Math.abs(fA.p - fB.p) / Math.max(fA.p, fB.p) : 0;
+    return {
+      price, broken, single, stale, coll, debt, liq, ltv, collValue, hf, limit,
+      used: limit > 0 ? debt / limit : 0,
+      liqPrice: coll > 0 && debt > 0 ? debt / (coll * liq) : null,
+      avail: Math.max(0, Math.min(limit - debt, Number(ethers.formatUnits(s.pool, 6)))),
+      fA, fB, dev, maxStale: Number(s.ora[1]), maxDev: Number(s.ora[2]) / 1e4, paused: s.paused,
+    };
+  }
+
+  // ---- gauge -------------------------------------------------------------------
+  const GR = 84, GX = 100, GY = 108;
+  const polar = (a, r = GR) => [GX + r * Math.cos(a), GY - r * Math.sin(a)];
+  function arc(a0, a1) {
+    const [x0, y0] = polar(a0), [x1, y1] = polar(a1);
+    return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${GR} ${GR} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+  }
+  const hfAngle = (hf) => Math.PI - ((Math.max(0.5, Math.min(2, hf)) - 0.5) / 1.5) * Math.PI;
+  $("#gBg").setAttribute("d", arc(Math.PI, 0));
+
+  // ---- render ------------------------------------------------------------------
+  function render() {
+    if (!S.snap || !S.cfg) return;
+    const m = model();
+    renderPosition(m);
+    renderShield(m);
+    renderAI(m);
+    renderActions(m);
+  }
+
+  function zone(m) {
+    if (m.debt <= 0) return ["mut", "No loan"];
+    if (m.broken) return ["acc", "Protected · frozen"];
+    if (m.hf < 1) return ["crit", "Liquidatable"];
+    if (m.hf < 1.1) return ["crit", "At risk"];
+    if (m.hf < 1.2) return ["warn", "Watch"];
+    return ["good", "Healthy"];
+  }
+
+  function renderPosition(m) {
+    const mine = S.view === "wallet" && S.account;
+    $("#posTitle").textContent = mine ? `Your position · ${short(S.account)}` : `Demo account · ${short(CFG.demoUser)}`;
+    const [cls, label] = zone(m);
+    $("#posPill").className = "right pill " + cls;
+    $("#posPill").innerHTML = `<span class="d"></span>${label}`;
+
+    const col = { good: "var(--good)", warn: "var(--warn)", crit: "var(--crit)", acc: "var(--accent)", mut: "var(--faint)" }[cls];
+    const hf = m.hf;
+    const a = hfAngle(Number.isFinite(hf) ? hf : 2);
+    const g = $("#gVal");
+    g.setAttribute("d", m.debt > 0 ? arc(Math.PI, a) : "");
+    g.setAttribute("stroke", col);
+    const [tx, ty] = polar(a), [ix, iy] = polar(a, GR - 12);
+    const t = $("#gTick");
+    t.setAttribute("x1", ix); t.setAttribute("y1", iy); t.setAttribute("x2", tx); t.setAttribute("y2", ty);
+    t.style.display = m.debt > 0 ? "" : "none";
+    $("#hfVal").textContent = m.debt > 0 ? hf.toFixed(3) : "—";
+    $("#hfVal").style.color = col;
+
+    $("#sColl").innerHTML = `${fmt(m.coll)} bMTB<small>${usd(m.collValue)} at ${usd(m.price, 4)}</small>`;
+    $("#sDebt").innerHTML = `${fmt(m.debt)} mUSDC<small>stablecoin, $1 each</small>`;
+    $("#sLiq").innerHTML = m.liqPrice
+      ? `${usd(m.liqPrice, 4)}<small>bMTB is at ${usd(m.price, 4)} now</small>`
+      : `—<small>no loan</small>`;
+    $("#sUsed").innerHTML = m.limit > 0
+      ? `${fmt(m.used * 100)}%<small>of ${usd(m.limit)} limit (${fmt(m.ltv * 100)}% LTV)</small>`
+      : `—<small>deposit collateral to borrow</small>`;
+    const bar = $("#usedBar");
+    bar.style.width = Math.min(100, m.used * 100) + "%";
+    bar.style.background = m.used > 1 ? "var(--crit)" : m.used > 0.9 ? "var(--warn)" : "var(--accent)";
+
+    const note = $("#posNote");
+    let msg = null;
+    if (m.broken && m.debt > 0) msg = ["acc", `🛡 <b>You're protected.</b> The price feeds disagree, so your loan is held at the last honest price (${usd(m.price, 4)}). Nobody can liquidate you on the bad price while a guardian reviews.`];
+    else if (m.paused) msg = ["warn", "Borrowing is paused while the risk team reviews. Repaying and adding collateral still work."];
+    else if (m.stale) msg = ["warn", "Price feeds are refreshing. Borrowing resumes as soon as a fresh price lands."];
+    else if (m.single) msg = ["warn", `Only one price feed is live, so borrow limits are temporarily capped at ${fmt(m.ltv * 100)}%.`];
+    else if (m.debt > 0 && m.hf < 1.1) msg = ["crit", "Your health factor is in the danger zone. The AI guardian is stepping in; you can also repay or add collateral."];
+    else if (m.debt > 0 && m.hf < 1.2) msg = ["warn", "Your position needs watching. The AI guardian will step in automatically below 1.10."];
+    note.hidden = !msg;
+    if (msg) { note.className = "note " + msg[0]; note.innerHTML = msg[1]; }
+  }
+
+  function renderShield(m) {
+    const ban = $("#shBanner");
+    if (m.broken) {
+      ban.className = "banner crit";
+      ban.innerHTML = `<span class="ic">🛑</span><div><b>Frozen: price attack blocked</b><span>The feeds disagree by ${fmt(m.dev * 100, 1)}%, above the ${fmt(m.maxDev * 100)}% limit. Loans are held at the last honest price.</span></div>`;
+    } else if (m.single) {
+      ban.className = "banner warn";
+      ban.innerHTML = `<span class="ic">⚠</span><div><b>One feed is quiet</b><span>Running on a single source, so borrow limits are capped at ${fmt(m.ltv * 100)}%.</span></div>`;
+    } else if (m.stale) {
+      ban.className = "banner warn";
+      ban.innerHTML = `<span class="ic">⏱</span><div><b>Refreshing prices</b><span>Waiting for the next price update.</span></div>`;
+    } else {
+      ban.className = "banner good";
+      ban.innerHTML = `<span class="ic">✓</span><div><b>Protection armed</b><span>Both feeds agree, so your loan uses their median price.</span></div>`;
+    }
+    const feed = (el, f) => {
+      if (!f) { el.innerHTML = `–<small>no price</small>`; return; }
+      const stale = f.age > m.maxStale;
+      el.className = "px" + (m.broken && m.fA && m.fB && f.p === Math.min(m.fA.p, m.fB.p) && m.dev > m.maxDev ? " bad" : "");
+      el.innerHTML = `${usd(f.p, 4)}<small>${stale ? "stale · " : ""}updated ${ago(f.age)}</small>`;
+    };
+    feed($("#fA"), m.fA);
+    feed($("#fB"), m.fB);
+    const devPct = m.dev * 100;
+    $("#devTxt").textContent = `${fmt(devPct, 1)}% apart · limit ${fmt(m.maxDev * 100)}%`;
+    const scale = 50; // bar spans 0–50% disagreement
+    const bar = $("#devBar");
+    bar.style.width = Math.min(100, (devPct / scale) * 100) + "%";
+    bar.style.background = m.dev > m.maxDev ? "var(--crit)" : "var(--good)";
+    $("#devLim").style.left = (m.maxDev * 100 / scale) * 100 + "%";
+    $("#usedPx").textContent = usd(m.price, 4);
+  }
+
+  function renderAI(m) {
+    const pill = $("#aiPill");
+    const last = S.agentLines[S.agentLines.length - 1];
+    let cls = "good", label = "Watching";
+    if (m && m.broken) { cls = "acc"; label = "Standing down"; }
+    else if (last && /ACT|REPAY/.test(last.text) && Date.now() - last.at < 30000) { cls = "warn"; label = "Stepping in"; }
+    else if (m && m.debt > 0 && m.hf < 1.2) { cls = "warn"; label = "On alert"; }
+    pill.className = "right pill " + cls;
+    pill.innerHTML = `<span class="d"></span>${label}`;
+
+    const think = $("#think");
+    think.hidden = !(S.api && S.agentLines.length);
+    $("#thinkLines").innerHTML = S.agentLines
+      .map((l) => `<div class="ln"><span class="t">${esc(l.time)}</span><span>${esc(l.text)}</span></div>`)
+      .join("");
+  }
+
+  function renderFeed() {
+    const el = $("#acts");
+    if (!S.feed.length) {
+      el.innerHTML = `<div class="muted" style="font-size:12.5px">No activity yet on this account.</div>`;
+      return;
+    }
+    const now = S.snap ? S.snap.now : Date.now() / 1000;
+    el.innerHTML = S.feed
+      .slice(0, 6)
+      .map((f) => {
+        const when = S.tsCache[f.block] ? ago(now - S.tsCache[f.block]) : "";
+        return `<div class="act ${f.kind}"><span class="ic">${f.icon}</span><div><b>${esc(f.title)}</b>${f.sub ? `<p>${esc(f.sub)}</p>` : ""}<div class="when">${when}${when ? " · " : ""}${txLink(f.tx)}</div></div></div>`;
+      })
+      .join("");
+  }
+
+  // ---- activity feed from on-chain events ----------------------------------------
+  function describe(lg, u) {
+    const isVault = eq(lg.address, CFG.c.vault);
+    let ev;
+    try { ev = (isVault ? IFACE.vault : IFACE.agg).parseLog(lg); } catch { return null; }
+    if (!ev) return null;
+    const a = ev.args;
+    const base = { key: lg.transactionHash + ":" + lg.index, block: lg.blockNumber, idx: lg.index, tx: lg.transactionHash, ev: ev.name };
+    const me = (x) => eq(x, u);
+    switch (ev.name) {
+      case "Repay":
+        if (!me(a.user)) return null;
+        if (eq(a.payer, CFG.keeper)) return { ...base, kind: "ai", icon: "🛡", title: `AI guardian repaid ${u6(a.amount)} mUSDC for you`, sub: "Pulled your health factor away from liquidation, paid from its own capped buffer." };
+        return { ...base, kind: "ok", icon: "↩", title: `Repaid ${u6(a.amount)} mUSDC` };
+      case "Borrow":
+        return me(a.user) ? { ...base, kind: "ok", icon: "↗", title: `Borrowed ${u6(a.amount)} mUSDC` } : null;
+      case "Deposit":
+        return me(a.user) ? { ...base, kind: "ok", icon: "⬇", title: `Deposited ${u18(a.amount)} bMTB` } : null;
+      case "Withdraw":
+        return me(a.user) ? { ...base, kind: "ok", icon: "⬆", title: `Withdrew ${u18(a.amount)} bMTB` } : null;
+      case "LiquidationFlagged":
+        return me(a.user) ? { ...base, kind: "shield", icon: "⏳", title: "Liquidation grace period started", sub: "You have a few minutes to repay or add collateral before anything is seized." } : null;
+      case "Liquidated":
+        return me(a.user) ? { ...base, kind: "shield", icon: "⚠", title: "Position liquidated" } : null;
+      case "CircuitBreakerTripped":
+        return eq(a.asset, CFG.c.bMTB)
+          ? { ...base, kind: "shield", icon: "🛑", title: "Price attack blocked", sub: `The feeds disagreed by ${fmt(Number(a.deviationBps) / 100, 1)}%. Loans were frozen on the last honest price, so no one could be liquidated on the bad one.` }
+          : null;
+      case "BreakerCleared":
+        return eq(a.asset, CFG.c.bMTB) ? { ...base, kind: "ok", icon: "✓", title: "Price protection re-armed", sub: "A guardian reviewed the feeds and resumed normal pricing." } : null;
+      case "Paused":
+        return { ...base, kind: "shield", icon: "⏸", title: "Borrowing paused for review" };
+      case "Unpaused":
+        return { ...base, kind: "ok", icon: "▶", title: "Borrowing resumed" };
+      default:
+        return null;
+    }
+  }
+
+  async function pollLogs() {
+    try {
+      const b = S.block || (await rp.getBlockNumber());
+      const from = S.logBlock ? S.logBlock + 1 : Math.max(0, b - 5000);
+      if (from > b) return;
+      const logs = await rp.getLogs({ address: [CFG.c.vault, CFG.c.aggregator], fromBlock: from, toBlock: b });
+      const u = viewed();
+      for (const lg of logs) {
+        const item = describe(lg, u);
+        if (!item || S.feed.some((f) => f.key === item.key)) continue;
+        // Every keeper poke while frozen re-emits the trip event; show one card per incident.
+        if (item.ev === "CircuitBreakerTripped") {
+          if (S.breaker === "tripped") continue;
+          S.breaker = "tripped";
+        }
+        if (item.ev === "BreakerCleared") S.breaker = "cleared";
+        S.feed.push(item);
+      }
+      S.feed.sort((x, y) => y.block - x.block || y.idx - x.idx);
+      S.feed = S.feed.slice(0, 20);
+      S.logBlock = b;
+      const need = [...new Set(S.feed.slice(0, 6).map((f) => f.block))].filter((n) => !S.tsCache[n]);
+      await Promise.all(need.map((n) => rp.getBlock(n).then((bl) => { if (bl) S.tsCache[n] = Number(bl.timestamp); }).catch(() => {})));
+      renderFeed();
+    } catch (e) { /* retried on the next tick */ }
+  }
+  function resetFeed() { S.feed = []; S.logBlock = 0; S.breaker = null; $("#acts").innerHTML = `<div class="muted" style="font-size:12.5px">Loading activity…</div>`; pollLogs(); }
+
+  // ---- wallet --------------------------------------------------------------------
+  const eth = window.ethereum;
+  async function ensureChain() {
+    const cid = await eth.request({ method: "eth_chainId" });
+    if (cid !== CFG.chainHex) {
+      try {
+        await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CFG.chainHex }] });
+      } catch (e) {
+        const code = e?.code ?? e?.data?.originalError?.code;
+        if (code !== 4902) throw e;
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [{ chainId: CFG.chainHex, chainName: "HashKey Chain Testnet", nativeCurrency: { name: "HSK", symbol: "HSK", decimals: 18 }, rpcUrls: [CFG.rpc], blockExplorerUrls: [CFG.explorer] }],
+        });
+      }
+    }
+    S.chainOk = (await eth.request({ method: "eth_chainId" })) === CFG.chainHex;
+    return S.chainOk;
+  }
+  async function connect() {
+    if (!eth) { toast("No wallet found. Install MetaMask to use your own account; the demo account stays viewable.", "crit"); return; }
+    try {
+      const accs = await eth.request({ method: "eth_requestAccounts" });
+      setAccount(accs[0]);
+      await ensureChain();
+    } catch (e) { toast("Wallet: " + reason(e), "crit"); }
+    renderHeader(); poll(); render();
+  }
+  function setAccount(a) {
+    const next = a ? ethers.getAddress(a) : null;
+    const changed = !eq(next, S.account);
+    S.account = next;
+    S.view = next ? "wallet" : "demo";
+    S.wal = null;
+    if (changed) { S.block = 0; resetFeed(); }
+  }
+  async function signer() {
+    if (!S.chainOk && !(await ensureChain())) throw new Error("switch your wallet to HashKey Testnet");
+    return new ethers.BrowserProvider(eth).getSigner();
+  }
+  function reason(e) {
+    if (e?.code === "ACTION_REJECTED" || e?.code === 4001 || e?.info?.error?.code === 4001) return "cancelled in wallet";
+    return e?.reason || e?.revert?.args?.[0] || e?.shortMessage || e?.info?.error?.message || e?.message || "failed";
+  }
+  if (eth) {
+    eth.on?.("accountsChanged", (accs) => { setAccount(accs[0]); renderHeader(); poll(); });
+    eth.on?.("chainChanged", async (cid) => { S.chainOk = cid === CFG.chainHex; renderHeader(); render(); });
+    eth.request({ method: "eth_accounts" }).then(async (accs) => {
+      if (accs && accs[0]) {
+        setAccount(accs[0]);
+        S.chainOk = (await eth.request({ method: "eth_chainId" })) === CFG.chainHex;
+        renderHeader(); poll();
+      }
+    }).catch(() => {});
+  }
+
+  function renderHeader() {
+    const b = $("#connectBtn");
+    if (!S.account) { b.textContent = "Connect wallet"; b.className = "btn primary"; return; }
+    b.className = "btn";
+    b.textContent = S.chainOk ? short(S.account) : "Switch to HashKey";
+  }
+  $("#connectBtn").addEventListener("click", () => (S.account && S.chainOk ? null : connect()));
+
+  function setLive(ok) {
+    $("#netDot").className = "dot " + (ok ? "live" : "off");
+    $("#netText").textContent = ok ? `HashKey Testnet · block ${fmt(S.block)}` : "Reconnecting to HashKey…";
+  }
+
+  // ---- actions -------------------------------------------------------------------
+  const TABS = {
+    deposit: { label: "Deposit", unit: "bMTB", dec: 18, verb: "Deposit collateral" },
+    borrow: { label: "Borrow", unit: "mUSDC", dec: 6, verb: "Borrow" },
+    repay: { label: "Repay", unit: "mUSDC", dec: 6, verb: "Repay" },
+    withdraw: { label: "Withdraw", unit: "bMTB", dec: 18, verb: "Withdraw collateral" },
+  };
+
+  function maxFor(m) {
+    const w = S.wal;
+    switch (S.tab) {
+      case "deposit": return w ? Number(ethers.formatUnits(w.bmtb, 18)) : 0;
+      case "borrow": return m.broken || m.paused ? 0 : Math.floor(m.avail * 100) / 100;
+      case "repay": return w ? Math.min(m.debt, Number(ethers.formatUnits(w.usdc, 6))) : 0;
+      case "withdraw": {
+        if (m.broken) return 0;
+        if (m.debt <= 0) return m.coll;
+        const needed = m.debt / (m.price * m.ltv);
+        return Math.max(0, Math.floor((m.coll - needed) * 100) / 100);
+      }
+    }
+    return 0;
+  }
+
+  function renderActions(m) {
+    const body = $("#actBody");
+    const sw = $("#viewSwitch");
+    sw.innerHTML = S.account && !eq(S.account, CFG.demoUser)
+      ? `<button class="btn link" id="swBtn">${S.view === "wallet" ? "View demo account" : "View my position"}</button>`
+      : "";
+    const swBtn = $("#swBtn");
+    if (swBtn) swBtn.onclick = () => { S.view = S.view === "wallet" ? "demo" : "wallet"; S.block = 0; resetFeed(); poll(); };
+
+    if (!S.account) {
+      body.innerHTML = `<div class="empty"><p>Connect a wallet to deposit tokenized T-bills and borrow against them. Until then you're viewing a live demo account.</p><button class="btn primary" id="cBtn">Connect wallet</button></div>`;
+      $("#cBtn").onclick = connect;
+      return;
+    }
+    if (!S.chainOk) {
+      body.innerHTML = `<div class="empty"><p>Your wallet is on another network. Terravault runs on HashKey Chain Testnet.</p><button class="btn primary" id="chBtn">Switch to HashKey Testnet</button></div>`;
+      $("#chBtn").onclick = async () => { try { await ensureChain(); } catch (e) { toast(reason(e), "crit"); } renderHeader(); render(); };
+      return;
+    }
+    if (S.view !== "wallet") {
+      body.innerHTML = `<div class="empty"><p>You're viewing the demo account. Switch to your own position to manage it.</p><button class="btn" id="myBtn">View my position</button></div>`;
+      $("#myBtn").onclick = () => { S.view = "wallet"; S.block = 0; resetFeed(); poll(); };
+      return;
+    }
+
+    const t = TABS[S.tab];
+    const max = m ? maxFor(m) : 0;
+    const w = S.wal;
+    const lowGas = w && w.hsk < ethers.parseEther("0.001");
+    const focused = document.activeElement && document.activeElement.id === "amt";
+    if (focused && body.dataset.tab === S.tab) {
+      // Don't rebuild the form while the user is typing; only refresh the numbers.
+      $("#maxTxt").textContent = `${fmt(max, 2)} ${t.unit}`;
+      return;
+    }
+    body.dataset.tab = S.tab;
+    body.innerHTML = `
+      <div class="tabs" role="tablist">${Object.entries(TABS).map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === S.tab}">${v.label}</button>`).join("")}</div>
+      <label class="field" for="amt"><input id="amt" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${esc(S.amount)}"><span class="unit">${t.unit}</span><button class="btn sm" id="maxBtn" type="button">Max</button></label>
+      <div class="meta"><span>Available: <b class="mono" id="maxTxt">${fmt(max, 2)} ${t.unit}</b></span>${S.tab === "deposit" ? `<button class="btn link" id="mintBtn" type="button">Get 10,000 test bMTB</button>` : ""}</div>
+      <button class="btn primary act-go" id="goBtn" ${S.busy ? "disabled" : ""}>${S.busy ? "Waiting for wallet…" : t.verb}</button>
+      <div class="wallet-line">
+        <span>Wallet: <b class="mono">${w ? fmt(Number(ethers.formatUnits(w.bmtb, 18)), 0) : "–"} bMTB</b></span>
+        <span><b class="mono">${w ? fmt(Number(ethers.formatUnits(w.usdc, 6)), 0) : "–"} mUSDC</b></span>
+        <span><b class="mono">${w ? Number(ethers.formatEther(w.hsk)).toFixed(4) : "–"} HSK</b> for gas</span>
+      </div>
+      ${lowGas ? `<div class="note warn">You need a little test HSK for gas. Get some free at <a href="https://hskchain.net/faucet" target="_blank" rel="noopener">hskchain.net/faucet</a>.</div>` : ""}
+      ${m && m.broken && (S.tab === "borrow" || S.tab === "withdraw") ? `<div class="note acc">Borrowing and withdrawals are paused while prices are frozen. Repaying and depositing still work.</div>` : ""}`;
+    body.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; S.amount = ""; renderActions(model()); }));
+    $("#amt").oninput = (e) => (S.amount = e.target.value);
+    $("#maxBtn").onclick = () => { S.amount = String(maxFor(model())); $("#amt").value = S.amount; };
+    $("#goBtn").onclick = submit;
+    const mint = $("#mintBtn");
+    if (mint) mint.onclick = mintTest;
+  }
+
+  async function runTx(label, send) {
+    const t = toast(`${label}: confirm in your wallet…`);
+    try {
+      const tx = await send();
+      t.set(`${label}: submitted`, "", tx.hash);
+      await tx.wait();
+      t.set(`${label}: confirmed ✓`, "good", tx.hash);
+      return true;
+    } catch (e) {
+      t.set(`${label}: ${reason(e)}`, "crit");
+      return false;
+    }
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 2500)); // let RPC nodes catch up between dependent txs
+
+  async function submit() {
+    if (S.busy) return;
+    const t = TABS[S.tab];
+    let amt;
+    try { amt = ethers.parseUnits((S.amount || "").trim(), t.dec); } catch { toast("Enter an amount first.", "crit"); return; }
+    if (amt <= 0n) { toast("Enter an amount above zero.", "crit"); return; }
+    S.busy = true; renderActions(model());
+    try {
+      const sg = await signer();
+      const vault = new ethers.Contract(CFG.c.vault, ABI.vault, sg);
+      if (S.tab === "deposit" || S.tab === "repay") {
+        const tokAddr = S.tab === "deposit" ? CFG.c.bMTB : CFG.c.mUSDC;
+        const tok = new ethers.Contract(tokAddr, ABI.erc20, sg);
+        const allowance = await (S.tab === "deposit" ? R.bmtb : R.usdc).allowance(S.account, CFG.c.vault);
+        if (allowance < amt) {
+          if (!(await runTx(`Approve ${t.unit}`, () => tok.approve(CFG.c.vault, amt)))) return;
+          await settle();
+        }
+      }
+      const ok = await runTx(t.label, () => {
+        if (S.tab === "deposit") return vault.deposit(CFG.c.bMTB, amt);
+        if (S.tab === "borrow") return vault.borrow(amt);
+        if (S.tab === "repay") return vault.repay(amt);
+        return vault.withdraw(CFG.c.bMTB, amt);
+      });
+      if (ok) { S.amount = ""; await settle(); }
+    } catch (e) {
+      toast(reason(e), "crit");
+    } finally {
+      S.busy = false; await poll(); pollLogs(); renderActions(model());
+    }
+  }
+
+  async function mintTest() {
+    if (S.busy) return;
+    S.busy = true; renderActions(model());
+    try {
+      const sg = await signer();
+      const tok = new ethers.Contract(CFG.c.bMTB, ABI.erc20, sg);
+      await runTx("Mint 10,000 test bMTB", () => tok.mint(S.account, ethers.parseUnits("10000", 18)));
+      await settle();
+    } catch (e) { toast(reason(e), "crit"); }
+    finally { S.busy = false; await poll(); renderActions(model()); }
+  }
+
+  // ---- toasts --------------------------------------------------------------------
+  function toast(text, kind = "", hash) {
+    const el = document.createElement("div");
+    const api = {
+      set(tx, k, h) {
+        el.className = "toast " + (k || "");
+        el.innerHTML = esc(tx) + (h ? `<br>${txLink(h)}` : "");
+        clearTimeout(el._t);
+        if (k) el._t = setTimeout(() => el.remove(), k === "crit" ? 9000 : 6000);
+      },
+    };
+    api.set(text, kind, hash);
+    $("#toasts").prepend(el);
+    if (!kind) el._t = setTimeout(() => el.remove(), 60000);
+    return api;
+  }
+
+  // ---- presenter (only when served by app/server.js) ---------------------------
+  const SCN_LABEL = { decline: "Market decline", attack: "Oracle attack", steady: "Steady" };
+  async function pollStatus() {
+    try {
+      const r = await fetch("api/status", { cache: "no-store" });
+      if (!r.ok) throw new Error();
+      S.status = await r.json();
+      S.api = true;
+    } catch { S.api = false; }
+    renderPresenter();
+  }
+  function renderPresenter() {
+    const p = $("#presenter");
+    p.hidden = !S.api;
+    if (!S.api) return;
+    const st = S.status;
+    p.querySelectorAll("[data-scn]").forEach((b) => {
+      b.classList.toggle("on", st.scenario === b.dataset.scn);
+      b.disabled = st.resetting;
+    });
+    const rb = $("#resetBtn");
+    rb.disabled = st.resetting;
+    rb.textContent = st.resetting ? "Resetting… (~1 min)" : "↺ Reset demo";
+    const dot = (on) => `<span class="dot ${on ? "live" : "off"}"></span>`;
+    $("#svc").innerHTML = `<span>${dot(st.services.keeper)}price keeper</span><span>${dot(st.services.agent)}AI agent</span>`;
+  }
+  $("#presenter").querySelectorAll("[data-scn]").forEach((b) => {
+    b.onclick = async () => {
+      const r = await fetch("api/scenario", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: b.dataset.scn }) });
+      if (r.ok) toast(`${SCN_LABEL[b.dataset.scn]} staged. It lands with the next price update, about 15 seconds.`, "good");
+      else toast("Couldn't stage that scenario: " + ((await r.json().catch(() => ({}))).error || r.status), "crit");
+      pollStatus();
+    };
+  });
+  $("#resetBtn").onclick = async () => {
+    const r = await fetch("api/reset", { method: "POST" });
+    if (r.ok) toast("Resetting the demo on-chain: clearing the breaker and restoring the loan. About a minute.", "good");
+    else toast("Reset is already running.", "crit");
+    pollStatus();
+  };
+
+  async function pollAgent() {
+    if (!S.api) return;
+    try {
+      const r = await fetch(`api/logs?name=agent&since=${S.agentSince}`, { cache: "no-store" }).then((x) => x.json());
+      for (const l of r.lines) {
+        S.agentSince = Math.max(S.agentSince, l.t);
+        const mm = l.line.match(/^\[[\d:.]+\]\s+(.*)$/);
+        if (!mm) continue;
+        const text = mm[1].replace(/tx (0x[0-9a-f]{6})[0-9a-f]+([0-9a-f]{4})/i, "tx $1…$2").replace(/\s{2,}/g, " ");
+        S.agentLines.push({ time: new Date(l.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }), text, at: l.t });
+      }
+      S.agentLines = S.agentLines.slice(-5);
+      renderAI(S.snap && S.cfg ? model() : null);
+    } catch { /* server gone; pollStatus hides the presenter bar */ }
+  }
+
+  // ---- loops ---------------------------------------------------------------------
+  poll();
+  pollLogs();
+  pollStatus();
+  setInterval(poll, 4000);
+  setInterval(pollLogs, 6000);
+  setInterval(pollStatus, 3000);
+  setInterval(pollAgent, 2500);
+})();
+</script>
+</body>
+</html>
