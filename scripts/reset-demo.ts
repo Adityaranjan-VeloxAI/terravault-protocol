@@ -24,6 +24,8 @@ import path from "path";
 
 const PRICE = ethers.parseUnits("1.02", 8);
 const TARGET_DEBT = ethers.parseUnits("34000", 6);
+const TARGET_COLL = ethers.parseUnits("50000", 18);
+const STAGE_DEPOSIT = ethers.parseUnits("1000", 18); // bMTB kept in the wallet for the live deposit
 const KEEPER_BUFFER = ethers.parseUnits("10000", 6);
 const CONTROL_FILE = path.join(__dirname, "keeper", "demo-control.json");
 
@@ -79,6 +81,7 @@ async function main() {
   const aggregator = await ethers.getContractAt("OracleAggregator", c.aggregator);
   const vault = await ethers.getContractAt("CollateralVault", c.vault);
   const mUSDC = await ethers.getContractAt("MockUSDC", c.mUSDC);
+  const bMTB = await ethers.getContractAt("MockRWAToken", c.bMTB);
   const riskEngine = await ethers.getContractAt("RiskEngine", c.riskEngine);
 
   console.log("─".repeat(74));
@@ -132,6 +135,36 @@ async function main() {
     } else {
       console.log("debt            : already 34,000 mUSDC");
     }
+
+    // The live on-stage deposit adds collateral; put it back so the next run's
+    // market decline still pushes health below the agent's 1.10 act line.
+    const coll: bigint = await retry(() => vault.collateral(demoUser, c.bMTB));
+    if (coll > TARGET_COLL) {
+      const amt = coll - TARGET_COLL;
+      await send("withdraw", () => vault.withdraw(c.bMTB, amt));
+      console.log(`collateral      : withdrew ${ethers.formatUnits(amt, 18)} back to the wallet → 50,000 bMTB`);
+    } else if (coll < TARGET_COLL) {
+      const amt = TARGET_COLL - coll;
+      const bal: bigint = await retry(() => bMTB.balanceOf(deployer.address));
+      if (bal < amt) await send("mint bMTB", () => bMTB.mint(deployer.address, amt - bal));
+      await (await bMTB.approve(c.vault, amt)).wait();
+      await send("deposit", () => vault.deposit(c.bMTB, amt));
+      console.log(`collateral      : deposited ${ethers.formatUnits(amt, 18)} → 50,000 bMTB`);
+    } else {
+      console.log("collateral      : 50,000 bMTB");
+    }
+
+    // Stage the live deposit: 1,000 bMTB in the wallet and a standing approval,
+    // so the deposit on stage is a single wallet confirmation.
+    const walletBMTB: bigint = await retry(() => bMTB.balanceOf(deployer.address));
+    if (walletBMTB < STAGE_DEPOSIT) {
+      await send("mint stage bMTB", () => bMTB.mint(deployer.address, STAGE_DEPOSIT - walletBMTB));
+    }
+    const allowance: bigint = await retry(() => bMTB.allowance(deployer.address, c.vault));
+    if (allowance < STAGE_DEPOSIT) {
+      await send("approve bMTB", () => bMTB.approve(c.vault, ethers.MaxUint256));
+    }
+    console.log("stage deposit   : 1,000 bMTB in the wallet, vault pre-approved");
   }
 
   // 5. Refill the agent's repay buffer.
