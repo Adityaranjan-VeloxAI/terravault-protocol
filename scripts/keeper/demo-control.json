@@ -1,0 +1,12 @@
+{
+  "_comment": "Live demo control — hot-reloaded by guardian-price-pusher.ts each tick. Edit and save to stage a scenario.",
+  "_scenarios": {
+    "steady":  "bMTB priceA/priceB = 1.02 (this file's default) — healthy, HF 1.275",
+    "attack":  "set bMTB.priceB = 0.612  -> -40% single-feed manipulation, breaker trips, position safe",
+    "decline": "set bMTB.priceA AND priceB = 0.90  -> feeds agree, accepted, agent auto-repays",
+    "stale":   "set bMTB.skipB = true  -> adapterB stops updating, single-source, LTV capped to 45%",
+    "reset":   "restore this file to the steady values below"
+  },
+  "bMTB": { "priceA": 1.02, "priceB": 1.02, "skipA": false, "skipB": false },
+  "mUSDC": { "priceA": 1.00, "priceB": 1.00, "skipA": false, "skipB": false }
+}
