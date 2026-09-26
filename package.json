@@ -18,7 +18,8 @@
     "reset:local": "hardhat run scripts/reset-demo.ts --network localhost",
     "try-liquidate": "hardhat run scripts/try-liquidate.ts --network hashkeyTestnet",
     "keeper": "ts-node scripts/keeper/guardian-price-pusher.ts",
-    "agent": "ts-node agents/risk-monitor.ts"
+    "agent": "ts-node agents/risk-monitor.ts",
+    "liquidator": "ts-node agents/liquidator.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

@@ -21,6 +21,7 @@ const HARDHAT = fs.realpathSync(path.join(ROOT, "node_modules", ".bin", "hardhat
 const SERVICES = {
   keeper: "scripts/keeper/guardian-price-pusher.ts",
   agent: "agents/risk-monitor.ts",
+  liquidator: "agents/liquidator.ts",
 };
 
 const STATIC = {
@@ -37,13 +38,14 @@ const SCENARIOS = {
   steady: { priceA: 1.02, priceB: 1.02, skipA: false, skipB: false },
   decline: { priceA: 0.85, priceB: 0.85, skipA: false, skipB: false },
   attack: { priceB: 0.51 }, // one feed 40% below the honest $0.85 feed
+  crash: { priceA: 0.7, priceB: 0.7, skipA: false, skipB: false }, // agreed crash: HF < 1.0
 };
 let scenario = "steady";
 let resetting = false;
 
 // ---- child processes -------------------------------------------------------
 const procs = {};
-const logs = { keeper: [], agent: [] };
+const logs = { keeper: [], agent: [], liquidator: [] };
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 function start(name) {
@@ -162,8 +164,21 @@ const server = http.createServer(async (req, res) => {
     return json(res, 202, { ok: true });
   }
 
+  if (url.pathname === "/api/try-liquidate" && req.method === "POST") {
+    const out = await new Promise((resolve) => {
+      let buf = "";
+      const child = spawn(process.execPath, [HARDHAT, "run", "scripts/try-liquidate.ts", "--network", NETWORK], { cwd: ROOT, env: process.env });
+      child.stdout.on("data", (d) => (buf += d));
+      child.stderr.on("data", (d) => (buf += d));
+      child.on("exit", () => resolve(buf.replace(ANSI, "")));
+    });
+    const line = out.split("\n").find((l) => /result\s*:/.test(l)) || "no result";
+    return json(res, 200, { result: line.replace(/^\s*result\s*:\s*/, "").trim() });
+  }
+
   if (url.pathname === "/api/logs") {
-    const name = url.searchParams.get("name") === "keeper" ? "keeper" : "agent";
+    const req_ = url.searchParams.get("name");
+    const name = logs[req_] ? req_ : "agent";
     const since = Number(url.searchParams.get("since") || 0);
     return json(res, 200, { lines: logs[name].filter((l) => l.t > since).slice(-50) });
   }
@@ -177,14 +192,15 @@ server.listen(PORT, () => {
   console.log(`Terravault app on ${url} (${NETWORK})`);
   if (process.env.SKIP_SERVICES !== "1") {
     start("keeper");
-    // Give the keeper one tick to refresh prices so the agent doesn't start on a stale feed.
+    // Give the keeper one tick to refresh prices so the agents don't start on a stale feed.
     setTimeout(() => procs.agent || start("agent"), 15000);
+    setTimeout(() => procs.liquidator || start("liquidator"), 17000);
   }
   if (process.platform === "darwin" && process.env.NO_OPEN !== "1") spawn("open", [url]);
 });
 
 async function shutdown() {
-  await Promise.all([stop("keeper"), stop("agent")]);
+  await Promise.all([stop("keeper"), stop("agent"), stop("liquidator")]);
   process.exit(0);
 }
 process.on("SIGINT", shutdown);

@@ -290,7 +290,8 @@
             <span>Up to 2,000 mUSDC per action</span>
             <span>Repay-only: can't touch your collateral</span>
           </div>
-          <div class="think" id="think" hidden><div class="h">Live reasoning</div><div id="thinkLines"></div></div>
+          <div class="think" id="think" hidden><div class="h">Risk monitor · live reasoning</div><div id="thinkLines"></div></div>
+          <div class="think" id="liqThink" hidden><div class="h">Liquidator agent · outside bot, no protocol role</div><div id="liqLines"></div></div>
           <div class="acts" id="acts"><div class="muted" style="font-size:12.5px">Loading activity…</div></div>
         </div>
       </section>
@@ -301,8 +302,10 @@
 <div id="presenter" hidden>
   <div class="wrap pres-in">
     <span class="lbl">Presenter</span>
-    <button class="btn sm" data-scn="decline">📉 Market decline</button>
-    <button class="btn sm" data-scn="attack">⚡ Oracle attack</button>
+    <button class="btn sm" data-scn="decline" title="Both feeds to $0.85: the AI agent repays back to health 1.30">📉 Market decline</button>
+    <button class="btn sm" data-scn="attack" title="One feed 40% below the other: the circuit breaker freezes the asset">⚡ Oracle attack</button>
+    <button class="btn sm" id="tryBtn" title="Simulate a liquidation call right now and show the contract's answer">🧪 Try liquidation</button>
+    <button class="btn sm" data-scn="crash" title="Both feeds to $0.70: health below 1.0, the outside liquidator flags, waits 5 min, seizes">💥 Crash</button>
     <button class="btn sm" id="resetBtn">↺ Reset demo</button>
     <span class="svc" id="svc"></span>
   </div>
@@ -631,9 +634,9 @@
       case "Withdraw":
         return me(a.user) ? { ...base, kind: "ok", icon: "⬆", title: `Withdrew ${u18(a.amount)} bMTB` } : null;
       case "LiquidationFlagged":
-        return me(a.user) ? { ...base, kind: "shield", icon: "⏳", title: "Liquidation grace period started", sub: "You have a few minutes to repay or add collateral before anything is seized." } : null;
+        return me(a.user) ? { ...base, kind: "shield", icon: "⏳", title: "Liquidation grace period started", sub: "Health fell below 1.0. The borrower has 5 minutes to repay or add collateral before liquidators can seize." } : null;
       case "Liquidated":
-        return me(a.user) ? { ...base, kind: "shield", icon: "⚠", title: "Position liquidated" } : null;
+        return me(a.user) ? { ...base, kind: "shield", icon: "🔨", title: "Liquidated by an outside agent", sub: `It repaid ${u6(a.debtRepaid)} mUSDC of debt and received ${u18(a.collateralSeized)} bMTB, including the ${fmt(Number(a.penaltyBps) / 100)}% bonus.` } : null;
       case "CircuitBreakerTripped":
         return eq(a.asset, CFG.c.bMTB)
           ? { ...base, kind: "shield", icon: "🛑", title: "Price attack blocked", sub: `The feeds disagreed by ${fmt(Number(a.deviationBps) / 100, 1)}%. Loans were frozen on the last honest price, so no one could be liquidated on the bad one.` }
@@ -904,7 +907,7 @@
   }
 
   // ---- presenter (only when served by app/server.js) ---------------------------
-  const SCN_LABEL = { decline: "Market decline", attack: "Oracle attack", steady: "Steady" };
+  const SCN_LABEL = { decline: "Market decline", attack: "Oracle attack", crash: "Crash to $0.70", steady: "Steady" };
   async function pollStatus() {
     try {
       const r = await fetch("api/status", { cache: "no-store" });
@@ -937,6 +940,16 @@
       pollStatus();
     };
   });
+  $("#tryBtn").onclick = async () => {
+    const b = $("#tryBtn");
+    b.disabled = true; b.textContent = "🧪 Checking…";
+    try {
+      const r = await fetch("api/try-liquidate", { method: "POST" }).then((x) => x.json());
+      const txt = r.result || "no result";
+      toast(`Liquidation attempt: ${txt}`, /REVERTED/.test(txt) ? "crit" : "good");
+    } catch { toast("Couldn't reach the local server.", "crit"); }
+    b.disabled = false; b.textContent = "🧪 Try liquidation";
+  };
   $("#resetBtn").onclick = async () => {
     const r = await fetch("api/reset", { method: "POST" });
     if (r.ok) toast("Resetting the demo on-chain: clearing the breaker and restoring the loan. About a minute.", "good");
@@ -958,6 +971,20 @@
       S.agentLines = S.agentLines.slice(-5);
       renderAI(S.snap && S.cfg ? model() : null);
     } catch { /* server gone; pollStatus hides the presenter bar */ }
+    try {
+      const r = await fetch(`api/logs?name=liquidator&since=${S.liqSince || 0}`, { cache: "no-store" }).then((x) => x.json());
+      S.liqLines = S.liqLines || [];
+      for (const l of r.lines) {
+        S.liqSince = Math.max(S.liqSince || 0, l.t);
+        const mm = l.line.match(/^\[[\d:.]+\]\s+(.*)$/);
+        if (!mm) continue;
+        const text = mm[1].replace(/tx (0x[0-9a-f]{6})[0-9a-f]+([0-9a-f]{4})/i, "tx $1…$2").replace(/\s{2,}/g, " ");
+        S.liqLines.push({ time: new Date(l.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }), text });
+      }
+      S.liqLines = S.liqLines.slice(-4);
+      $("#liqThink").hidden = !S.liqLines.length;
+      $("#liqLines").innerHTML = S.liqLines.map((l) => `<div class="ln"><span class="t">${esc(l.time)}</span><span>${esc(l.text)}</span></div>`).join("");
+    } catch { /* liquidator not running */ }
   }
 
   // ---- loops ---------------------------------------------------------------------
