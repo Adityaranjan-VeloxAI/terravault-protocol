@@ -175,6 +175,12 @@
   .pres-in .svc { margin-left: auto; display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); align-items: center; }
   .pres-in .svc span { display: inline-flex; align-items: center; gap: 6px; }
 
+  [hidden] { display: none !important; }
+  .grp { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .simbanner { background: linear-gradient(90deg, rgba(176,109,255,0.18), rgba(124,141,255,0.12)); border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); font-size: 12.5px; }
+  .simbanner .wrap { padding-block: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .simbanner b { color: var(--ink); }
+
   /* toasts */
   #toasts { position: fixed; right: 16px; bottom: 84px; z-index: 40; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); }
   .toast { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; box-shadow: var(--shadow); animation: tin .2s ease; }
@@ -200,6 +206,8 @@
     <button class="btn primary" id="connectBtn">Connect wallet</button>
   </div>
 </header>
+
+<div class="simbanner" id="simBanner" hidden><div class="wrap">🎬 <b>Simulation mode.</b> <span class="muted">Same risk rules as the deployed contracts, run in your browser. Nothing here is an on-chain transaction; the 5-minute liquidation grace period is shortened to 20 seconds.</span> <button class="btn link" id="exitSim">Back to live</button></div></div>
 
 <main class="wrap">
   <section class="hero">
@@ -299,15 +307,28 @@
   </div>
 </main>
 
-<div id="presenter" hidden>
+<div id="presenter">
   <div class="wrap pres-in">
-    <span class="lbl">Presenter</span>
+    <span class="lbl" id="presLbl">Presenter</span>
+    <span class="grp" id="simCtl" hidden>
+      <button class="btn sm" data-sim="deposit" title="A borrower adds 1,000 tokenized T-bills as collateral">① Deposit 1,000</button>
+      <button class="btn sm" data-sim="borrow" title="Borrow 1,000 mUSDC, inside the 80% LTV cap">② Borrow 1,000</button>
+      <button class="btn sm" data-sim="decline" title="Both feeds fall to $0.85 and agree: the AI agent repays exactly back to health 1.30">③ 📉 Market decline</button>
+      <button class="btn sm" data-sim="attack" title="One feed pushed 40% below the other: the circuit breaker freezes the asset">④ ⚡ Oracle attack</button>
+      <button class="btn sm" data-sim="try" title="Ask the vault to liquidate right now and show its answer">⑤ 🧪 Try liquidation</button>
+      <button class="btn sm" data-sim="crash" title="A guardian re-arms protection, then both feeds fall until health is 0.90: the outside liquidator flags, waits the grace period, seizes">⑥ 💥 Crash &amp; liquidate</button>
+      <button class="btn sm" data-sim="reset">↺ Reset</button>
+    </span>
+    <span class="grp" id="liveCtl" hidden>
     <button class="btn sm" data-scn="decline" title="Both feeds to $0.85: the AI agent repays back to health 1.30">📉 Market decline</button>
     <button class="btn sm" data-scn="attack" title="One feed 40% below the other: the circuit breaker freezes the asset">⚡ Oracle attack</button>
     <button class="btn sm" id="tryBtn" title="Simulate a liquidation call right now and show the contract's answer">🧪 Try liquidation</button>
     <button class="btn sm" data-scn="crash" title="Both feeds to $0.70: health below 1.0, the outside liquidator flags, waits 5 min, seizes">💥 Crash</button>
     <button class="btn sm" id="resetBtn">↺ Reset demo</button>
     <span class="svc" id="svc"></span>
+    </span>
+    <span class="muted" id="pubNote" style="font-size:12px">Live on-chain controls run from the team's laptop.</span>
+    <button class="btn sm primary" id="modeBtn" style="margin-left:auto">▶ Simulation</button>
   </div>
 </div>
 <div id="toasts" aria-live="polite"></div>
@@ -415,6 +436,7 @@
 
   // ---- chain snapshot ----------------------------------------------------------
   async function poll() {
+    if (S.sim) return;
     try {
       const b = await rp.getBlockNumber();
       if (b < S.block) return; // a load-balanced RPC node that is behind; keep the newer view
@@ -431,6 +453,7 @@
         R.vault.paused(at),
         R.vault.poolLiquidity(at),
       ]);
+      if (S.sim) return; // simulation switched on while this read was in flight
       if (!S.cfg) S.cfg = await R.reg.getConfig(CFG.c.bMTB);
       if (S.account) {
         const [wb, wu, wh] = await Promise.all([
@@ -440,6 +463,7 @@
         ]);
         S.wal = { bmtb: wb, usdc: wu, hsk: wh };
       }
+      if (S.sim) return;
       S.block = b;
       const now = blk ? Number(blk.timestamp) : Math.floor(Date.now() / 1000);
       S.snap = { now, ora, pa, pb, coll, debt, effLtv, paused, pool, user: u };
@@ -505,7 +529,7 @@
 
   function renderPosition(m) {
     const mine = S.view === "wallet" && S.account;
-    $("#posTitle").textContent = mine ? `Your position · ${short(S.account)}` : `Demo account · ${short(CFG.demoUser)}`;
+    $("#posTitle").textContent = S.sim ? "Simulated borrower" : mine ? `Your position · ${short(S.account)}` : `Demo account · ${short(CFG.demoUser)}`;
     const [cls, label] = zone(m);
     $("#posPill").className = "right pill " + cls;
     $("#posPill").innerHTML = `<span class="d"></span>${label}`;
@@ -591,7 +615,7 @@
     pill.innerHTML = `<span class="d"></span>${label}`;
 
     const think = $("#think");
-    think.hidden = !(S.api && S.agentLines.length);
+    think.hidden = !((S.api || S.sim) && S.agentLines.length);
     $("#thinkLines").innerHTML = S.agentLines
       .map((l) => `<div class="ln"><span class="t">${esc(l.time)}</span><span>${esc(l.text)}</span></div>`)
       .join("");
@@ -607,8 +631,8 @@
     el.innerHTML = S.feed
       .slice(0, 6)
       .map((f) => {
-        const when = S.tsCache[f.block] ? ago(now - S.tsCache[f.block]) : "";
-        return `<div class="act ${f.kind}"><span class="ic">${f.icon}</span><div><b>${esc(f.title)}</b>${f.sub ? `<p>${esc(f.sub)}</p>` : ""}<div class="when">${when}${when ? " · " : ""}${txLink(f.tx)}</div></div></div>`;
+        const when = f.at ? ago(now - f.at) : S.tsCache[f.block] ? ago(now - S.tsCache[f.block]) : "";
+        return `<div class="act ${f.kind}"><span class="ic">${f.icon}</span><div><b>${esc(f.title)}</b>${f.sub ? `<p>${esc(f.sub)}</p>` : ""}<div class="when">${when}${when ? " · " : ""}${f.tx ? txLink(f.tx) : "simulated"}</div></div></div>`;
       })
       .join("");
   }
@@ -653,11 +677,13 @@
   }
 
   async function pollLogs() {
+    if (S.sim) return;
     try {
       const b = S.block || (await rp.getBlockNumber());
       const from = S.logBlock ? S.logBlock + 1 : Math.max(0, b - 5000);
       if (from > b) return;
       const logs = await rp.getLogs({ address: [CFG.c.vault, CFG.c.aggregator], fromBlock: from, toBlock: b });
+      if (S.sim) return; // simulation switched on while this read was in flight
       const u = viewed();
       for (const lg of logs) {
         const item = describe(lg, u);
@@ -745,6 +771,7 @@
   $("#connectBtn").addEventListener("click", () => (S.account && S.chainOk ? null : connect()));
 
   function setLive(ok) {
+    if (S.sim) { $("#netDot").className = "dot live"; $("#netText").textContent = "Simulation mode · not on-chain"; return; }
     $("#netDot").className = "dot " + (ok ? "live" : "off");
     $("#netText").textContent = ok ? `HashKey Testnet · block ${fmt(S.block)}` : "Reconnecting to HashKey…";
   }
@@ -775,6 +802,12 @@
 
   function renderActions(m) {
     const body = $("#actBody");
+    if (S.sim) {
+      $("#viewSwitch").innerHTML = "";
+      body.dataset.tab = "";
+      body.innerHTML = `<div class="empty"><p>Simulation mode: use <b>① Deposit</b> and <b>② Borrow</b> in the presenter bar below. Go back to live to use your own wallet on HashKey testnet.</p></div>`;
+      return;
+    }
     const sw = $("#viewSwitch");
     sw.innerHTML = S.account && !eq(S.account, CFG.demoUser)
       ? `<button class="btn link" id="swBtn">${S.view === "wallet" ? "View demo account" : "View my position"}</button>`
@@ -918,9 +951,12 @@
     renderPresenter();
   }
   function renderPresenter() {
-    const p = $("#presenter");
-    p.hidden = !S.api;
-    if (!S.api) return;
+    $("#simCtl").hidden = !S.sim;
+    $("#liveCtl").hidden = S.sim || !S.api;
+    $("#pubNote").hidden = S.sim || S.api;
+    $("#modeBtn").textContent = S.sim ? "Back to live" : "▶ Simulation";
+    $("#presLbl").textContent = S.sim ? "Simulation" : S.api ? "Live · on-chain" : "Presenter";
+    if (!S.api || S.sim) return;
     const st = S.status;
     p.querySelectorAll("[data-scn]").forEach((b) => {
       b.classList.toggle("on", st.scenario === b.dataset.scn);
@@ -958,7 +994,7 @@
   };
 
   async function pollAgent() {
-    if (!S.api) return;
+    if (!S.api || S.sim) return;
     try {
       const r = await fetch(`api/logs?name=agent&since=${S.agentSince}`, { cache: "no-store" }).then((x) => x.json());
       for (const l of r.lines) {
@@ -987,6 +1023,198 @@
     } catch { /* liquidator not running */ }
   }
 
+  // ---- simulation mode -------------------------------------------------------------
+  // Runs the demo script in the browser with the deployed contracts' rules: two feeds
+  // with a 5% deviation breaker that stays tripped until a guardian clears it, an 85%
+  // liquidation threshold and 80% max LTV, the risk agent's exact repay back to 1.30
+  // in steps of at most 2,000 from a 10,000 facility (never below HF 1.0), and the
+  // liquidator's quote, flag, grace period and seize (full debt, 5% bonus capped by
+  // collateral). Nothing is sent on-chain; the 300s grace period is SIM_GRACE seconds.
+  const SIM_GRACE = 20;
+  const SIM0 = () => ({ pA: 1.02, pB: 1.02, good: 1.02, broken: false, coll: 50000, debt: 34000, flaggedAt: 0, facility: 0, busy: false });
+  let SIM = SIM0();
+  let simIdx = 0;
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const simNow = () => Math.floor(Date.now() / 1000);
+  const simHf = () => (SIM.debt > 0.000001 ? (SIM.coll * SIM.good * 0.85) / SIM.debt : Infinity);
+  const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  function simFeed(kind, icon, title, sub) {
+    S.feed.unshift({ key: "sim" + ++simIdx, block: 0, idx: simIdx, tx: null, kind, icon, title, sub, at: simNow() });
+    S.feed = S.feed.slice(0, 20);
+    renderFeed();
+  }
+  function simSay(who, text, once) {
+    const list = who === "liq" ? (S.liqLines = S.liqLines || []) : S.agentLines;
+    if (once && list.length && list[list.length - 1].text === text) return;
+    list.push({ time: clock(), text, at: Date.now() });
+    if (who === "liq") S.liqLines = S.liqLines.slice(-4);
+    else S.agentLines = S.agentLines.slice(-5);
+    const liq = S.liqLines || [];
+    $("#liqThink").hidden = !liq.length;
+    $("#liqLines").innerHTML = liq.map((l) => `<div class="ln"><span class="t">${esc(l.time)}</span><span>${esc(l.text)}</span></div>`).join("");
+    if (S.snap && S.cfg) renderAI(model());
+  }
+  function simSnap() {
+    const now = simNow();
+    const p8 = (x) => BigInt(Math.round(x * 1e8));
+    S.snap = {
+      now,
+      ora: [[], 90n, 500n, SIM.broken, p8(SIM.good), BigInt(now), false, true],
+      pa: [p8(SIM.pA), BigInt(now - 3)],
+      pb: [p8(SIM.pB), BigInt(now - 2)],
+      coll: ethers.parseUnits(Math.max(0, SIM.coll).toFixed(6), 18),
+      debt: ethers.parseUnits(Math.max(0, SIM.debt).toFixed(6), 6),
+      effLtv: 8000n, paused: false, pool: ethers.parseUnits("1000000", 6), user: CFG.demoUser,
+    };
+    if (!S.cfg) S.cfg = { liqThresholdBps: 8500n };
+    render();
+  }
+  // The keeper's push + the aggregator's poke.
+  function simPoke() {
+    const dev = Math.abs(SIM.pA - SIM.pB) / Math.max(SIM.pA, SIM.pB);
+    if (!SIM.broken) {
+      if (dev > 0.05) {
+        SIM.broken = true;
+        simFeed("shield", "🛑", "Price attack blocked", `The feeds disagreed by ${fmt(dev * 100, 1)}%. Loans were frozen on the last honest price, so no one could be liquidated on the bad one.`);
+      } else SIM.good = (SIM.pA + SIM.pB) / 2;
+    }
+    simSnap();
+  }
+  async function simAgent() {
+    if (SIM.busy || SIM.debt <= 0.000001) return;
+    const hf = simHf();
+    if (SIM.broken) return simSay("agent", "🛡 GUARD circuit breaker tripped: manipulated feed rejected. Standing down, no repay on a frozen price.", true);
+    if (hf >= 1.2) return simSay("agent", `✓ OK HF ${hf.toFixed(3)} — healthy.`);
+    if (hf >= 1.1) return simSay("agent", `⚠ WARN HF ${hf.toFixed(3)} below warn 1.200 — watching closely.`);
+    if (hf < 1) return simSay("agent", `⛔ HOLD HF ${hf.toFixed(3)} is below 1.0 — not subsidizing an insolvent position. Left to liquidators.`, true);
+    SIM.busy = true;
+    const need0 = SIM.debt - (SIM.coll * SIM.good * 0.85) / 1.3;
+    simSay("agent", `🚨 ACT HF ${hf.toFixed(3)} below act 1.100 — ${fmt(need0, 2)} mUSDC restores 1.300.`);
+    while (SIM.facility < 10000) {
+      const need = SIM.debt - (SIM.coll * SIM.good * 0.85) / 1.3;
+      if (need <= 0.000001 || simHf() < 1) break;
+      await pause(1300);
+      const amt = Math.min(need, 2000, 10000 - SIM.facility);
+      const before = simHf();
+      SIM.debt -= amt;
+      SIM.facility += amt;
+      simSay("agent", `✓ REPAY ${fmt(amt, 2)} mUSDC | HF ${before.toFixed(3)} → ${simHf().toFixed(3)} | facility ${fmt(SIM.facility, 2)}/10,000`);
+      simFeed("ai", "🛡", `AI guardian repaid ${fmt(amt, 2)} mUSDC for you`, "Paid from its own capped facility to pull your health factor away from liquidation.");
+      simSnap();
+    }
+    const done = simHf();
+    simSay("agent", done >= 1.2999 ? `✓ DONE HF ${done.toFixed(3)} is at or above target 1.300. Standing down.` : `⛔ HOLD facility exhausted at HF ${done.toFixed(3)}.`);
+    SIM.busy = false;
+  }
+  function simLiq() {
+    if (SIM.debt <= 0.000001) return;
+    const hf = simHf();
+    if (SIM.broken) return simSay("liq", "🛑 BLOCK price frozen by the circuit breaker: liquidation not allowed.", true);
+    if (hf >= 1) return simSay("liq", `· WATCH HF ${hf.toFixed(3)}: healthy, nothing to liquidate.`, true);
+    const seize = Math.min(SIM.coll, (SIM.debt * 1.05) / SIM.good);
+    const profit = seize * SIM.good - SIM.debt;
+    const q = `repay ${fmt(SIM.debt)} mUSDC · receive ${fmt(seize)} bMTB · profit +$${fmt(profit, 2)}`;
+    if (!SIM.flaggedAt) {
+      SIM.flaggedAt = simNow();
+      simSay("liq", `📋 QUOTE HF ${hf.toFixed(3)} at $${SIM.good.toFixed(4)} · ${q}`);
+      simSay("liq", `⏳ FLAG grace period started (300s on-chain, ${SIM_GRACE}s here).`);
+      simFeed("shield", "⏳", "Liquidation grace period started", "Health fell below 1.0. The borrower gets a grace window to repay or add collateral before liquidators can seize.");
+      return;
+    }
+    const left = SIM.flaggedAt + SIM_GRACE - simNow();
+    if (left > 0) return simSay("liq", `⏳ WAIT grace period, ${left}s left`);
+    if (profit < 0) return simSay("liq", `✗ SKIP unprofitable (bad debt): ${q}`, true);
+    const repaid = SIM.debt;
+    SIM.coll -= seize;
+    SIM.debt = 0;
+    SIM.flaggedAt = 0;
+    simSay("liq", `🔨 SEIZE repaid ${fmt(repaid)} mUSDC, received ${fmt(seize)} bMTB (+$${fmt(profit, 2)}) ✓`);
+    simFeed("shield", "🔨", "Liquidated by an outside agent", `It repaid ${fmt(repaid)} mUSDC of debt and received ${fmt(seize)} bMTB, including the 5% bonus.`);
+    simSnap();
+  }
+  const SIM_ACTIONS = {
+    deposit() {
+      SIM.coll += 1000;
+      simFeed("ok", "⬇", "Deposited 1,000 bMTB");
+      toast("Deposit confirmed (simulated).", "good");
+    },
+    borrow() {
+      if (SIM.broken) return toast("Borrow reverted: circuit breaker tripped.", "crit");
+      if (SIM.coll * SIM.good * 0.8 - SIM.debt < 1000) return toast("Borrow reverted: exceeds max LTV.", "crit");
+      SIM.debt += 1000;
+      simFeed("ok", "↗", "Borrowed 1,000 mUSDC");
+      toast("Borrow confirmed (simulated).", "good");
+    },
+    decline() {
+      SIM.pA = SIM.pB = 0.85;
+      toast("Market decline: both feeds fall to $0.85 and agree.", "good");
+    },
+    attack() {
+      SIM.pB = +(SIM.pA * 0.6).toFixed(4);
+      toast(`Oracle attack: feed B pushed to $${SIM.pB}, 40% below feed A.`, "good");
+    },
+    crash() {
+      if (SIM.broken) {
+        SIM.broken = false;
+        SIM.pB = SIM.pA;
+        simFeed("ok", "✓", "Price protection re-armed", "A guardian reviewed the feeds and resumed normal pricing.");
+      }
+      if (SIM.debt <= 0.000001) return toast("No open loan to crash. Press Reset first.", "crit");
+      const p = +((0.9 * SIM.debt) / (SIM.coll * 0.85)).toFixed(4);
+      SIM.pA = SIM.pB = p;
+      toast(`Crash: both feeds fall to $${p} and agree. Health drops to 0.90.`, "good");
+    },
+    try() {
+      const hf = simHf();
+      let r;
+      if (SIM.debt <= 0.000001) r = "REVERTED — no position";
+      else if (SIM.broken) r = "REVERTED — cannot liquidate on frozen price";
+      else if (hf >= 1) r = "REVERTED — not liquidatable";
+      else if (!SIM.flaggedAt) r = "accepted: the first call only flags the loan and starts the grace period";
+      else if (SIM.flaggedAt + SIM_GRACE > simNow()) r = "REVERTED — grace period active";
+      else r = "accepted: the liquidator repays the debt and takes the collateral";
+      toast(`Liquidation attempt: ${r}`, /REVERTED/.test(r) ? "crit" : "good");
+    },
+    reset() {
+      SIM = SIM0();
+      S.feed = []; S.agentLines = []; S.liqLines = [];
+      $("#liqThink").hidden = true;
+      renderFeed();
+      toast("Simulation reset: health 1.275.", "good");
+    },
+  };
+  function setSim(on) {
+    S.sim = on;
+    $("#simBanner").hidden = !on;
+    S.feed = []; S.logBlock = 0; S.breaker = null; S.agentLines = []; S.liqLines = []; S.block = 0;
+    $("#liqThink").hidden = true;
+    if (on) {
+      SIM = SIM0();
+      history.replaceState(null, "", "#sim");
+      simSnap();
+      renderFeed();
+    } else {
+      history.replaceState(null, "", location.pathname);
+      S.cfg = null; S.snap = null;
+      poll(); pollLogs();
+    }
+    renderPresenter(); renderHeader(); setLive(true);
+  }
+  document.querySelectorAll("[data-sim]").forEach((b) => {
+    b.onclick = () => {
+      const k = b.dataset.sim;
+      SIM_ACTIONS[k]();
+      if (k === "decline" || k === "attack" || k === "crash") setTimeout(simPoke, 1500);
+      else simSnap();
+    };
+  });
+  $("#modeBtn").onclick = () => setSim(!S.sim);
+  $("#exitSim").onclick = () => setSim(false);
+  setInterval(() => { if (S.sim) simAgent(); }, 2500);
+  setInterval(() => { if (S.sim) simLiq(); }, 2500);
+  setInterval(() => { if (S.sim && !SIM.busy) simSnap(); }, 4000);
+
   // ---- loops ---------------------------------------------------------------------
   poll();
   pollLogs();
@@ -995,6 +1223,8 @@
   setInterval(pollLogs, 6000);
   setInterval(pollStatus, 3000);
   setInterval(pollAgent, 2500);
+  renderPresenter();
+  if (location.hash === "#sim") setSim(true);
 })();
 </script>
 </body>
