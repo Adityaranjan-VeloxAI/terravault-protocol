@@ -1,0 +1,4 @@
+# Only the static web app is deployed; never upload keys, deployments or node_modules.
+/*
+!/app
+/app/server.js

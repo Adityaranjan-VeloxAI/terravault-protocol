@@ -13,3 +13,4 @@ deployments/localhost.json
 deployments/latest.json
 deployments/agent-state.json
 deployments/liquidator-wallet.json
+.vercel
