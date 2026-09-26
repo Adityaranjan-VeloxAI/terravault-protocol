@@ -118,20 +118,21 @@ The full timed script (what to click, what to say, presenter split, and the test
 
 ## Deployed addresses — HashKey Testnet (chainId 133)
 
-> Fill in after `npm run deploy`. Values are read live from `deployments/hashkeyTestnet.json`. **Keep the deploy tx hash handy for the demo.**
+> Live on HashKey Testnet. Source of truth: `deployments/hashkeyTestnet.json`. The demo position (50,000 bMTB collateral, 34,000 mUSDC debt, HF 1.275) is open for the deployer/demo user.
 
 | Contract | Address |
 |---|---|
-| MockRWAToken (`bMTB`) | `0x…` |
-| MockUSDC (`mUSDC`) | `0x…` |
-| GuardianOracleAdapter A | `0x…` |
-| GuardianOracleAdapter B | `0x…` |
-| OracleAggregator | `0x…` |
-| AssetQualityRegistry | `0x…` |
-| RiskEngine | `0x…` |
-| CollateralVault | `0x…` |
-| ComplianceGate | `0x…` |
-| Deploy tx hash | `0x…` |
+| MockRWAToken (`bMTB`) | [`0x2D9dc2776C9cd2c9c68BaD7C86577CBB7388BC0E`](https://hashkeychain-testnet-explorer.alt.technology/address/0x2D9dc2776C9cd2c9c68BaD7C86577CBB7388BC0E) |
+| MockUSDC (`mUSDC`) | [`0x2fC4DA60C9B43881a4a1e752DC5e7aFE2e91993C`](https://hashkeychain-testnet-explorer.alt.technology/address/0x2fC4DA60C9B43881a4a1e752DC5e7aFE2e91993C) |
+| GuardianOracleAdapter A | [`0x126f835dA5Bed8B147708c0912BfD570D203817A`](https://hashkeychain-testnet-explorer.alt.technology/address/0x126f835dA5Bed8B147708c0912BfD570D203817A) |
+| GuardianOracleAdapter B | [`0x8d6C9878ce0BE6b1775695303B1F3b0Aea3fe400`](https://hashkeychain-testnet-explorer.alt.technology/address/0x8d6C9878ce0BE6b1775695303B1F3b0Aea3fe400) |
+| OracleAggregator | [`0xe932f559332aA604cE683e66Db91E006223Fc9B2`](https://hashkeychain-testnet-explorer.alt.technology/address/0xe932f559332aA604cE683e66Db91E006223Fc9B2) |
+| AssetQualityRegistry | [`0x1F7f82ef0F12a647cF5116E9E71C3eb07DaCCe34`](https://hashkeychain-testnet-explorer.alt.technology/address/0x1F7f82ef0F12a647cF5116E9E71C3eb07DaCCe34) |
+| RiskEngine | [`0xd6F7D14beD2e96B54b697B55a42f2B6E6A64393f`](https://hashkeychain-testnet-explorer.alt.technology/address/0xd6F7D14beD2e96B54b697B55a42f2B6E6A64393f) |
+| CollateralVault | [`0xA025bb7981D50130d6F0F0e77c19cB283e18e472`](https://hashkeychain-testnet-explorer.alt.technology/address/0xA025bb7981D50130d6F0F0e77c19cB283e18e472) |
+| ComplianceGate | [`0x6c07990b23EE25Fb2585AB13a4F2Ff51114BB7Ca`](https://hashkeychain-testnet-explorer.alt.technology/address/0x6c07990b23EE25Fb2585AB13a4F2Ff51114BB7Ca) |
+| Deployer / demo user | [`0x856df6369Cb732FEdb768AdBE253B02fbA7fE2FB`](https://hashkeychain-testnet-explorer.alt.technology/address/0x856df6369Cb732FEdb768AdBE253B02fbA7fE2FB) |
+| Keeper / agent | [`0xf7B09Cc2E1b994Dd4296C632B729515E6682BA29`](https://hashkeychain-testnet-explorer.alt.technology/address/0xf7B09Cc2E1b994Dd4296C632B729515E6682BA29) |
 
 Block explorer (Blockscout): `https://hashkeychain-testnet-explorer.alt.technology`
 

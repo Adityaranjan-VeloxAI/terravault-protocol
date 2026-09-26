@@ -108,14 +108,44 @@ async function main() {
   );
 
   // --- 3. Seed guardian prices (both adapters agree) + poke ----------------
-  await (await adapterA.updatePrice(c.bMTB, BMTB_PRICE)).wait();
-  await (await adapterB.updatePrice(c.bMTB, BMTB_PRICE)).wait();
-  await (await adapterA.updatePrice(c.mUSDC, MUSDC_PRICE)).wait();
-  await (await adapterB.updatePrice(c.mUSDC, MUSDC_PRICE)).wait();
-  await (await aggregator.poke(c.bMTB)).wait();
-  await (await aggregator.poke(c.mUSDC)).wait();
-  const [bmtbPx] = await aggregator.getPrice(c.bMTB);
-  const [usdcPx] = await aggregator.getPrice(c.mUSDC);
+  // Public testnet RPCs are load-balanced: a call right after a write can land on
+  // a node one block behind. Retry reads, and retry sends only when they failed
+  // before broadcast (no receipt) so a mined-and-reverted tx is never re-sent.
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  async function retry<T>(fn: () => Promise<T>, tries = 6, delayMs = 2500): Promise<T> {
+    for (let i = 0; ; i++) {
+      try {
+        return await fn();
+      } catch (e) {
+        if (i >= tries - 1) throw e;
+        await sleep(delayMs);
+      }
+    }
+  }
+  async function send(label: string, fn: () => Promise<any>, tries = 6) {
+    for (let i = 0; ; i++) {
+      try {
+        return await (await fn()).wait();
+      } catch (e: any) {
+        if (e?.receipt || i >= tries - 1) throw e;
+        console.log(`  (${label}: RPC not synced yet, retrying…)`);
+        await sleep(2500);
+      }
+    }
+  }
+  // Push both feeds for both assets, then poke. maxStaleness is short on purpose
+  // (the STALE scenario demos fast), so the seed refreshes again before borrowing.
+  async function refreshPrices() {
+    await send("price bMTB A", () => adapterA.updatePrice(c.bMTB, BMTB_PRICE));
+    await send("price bMTB B", () => adapterB.updatePrice(c.bMTB, BMTB_PRICE));
+    await send("price mUSDC A", () => adapterA.updatePrice(c.mUSDC, MUSDC_PRICE));
+    await send("price mUSDC B", () => adapterB.updatePrice(c.mUSDC, MUSDC_PRICE));
+    await send("poke bMTB", () => aggregator.poke(c.bMTB));
+    await send("poke mUSDC", () => aggregator.poke(c.mUSDC));
+  }
+  await refreshPrices();
+  const [bmtbPx] = await retry(() => aggregator.getPrice(c.bMTB));
+  const [usdcPx] = await retry(() => aggregator.getPrice(c.mUSDC));
   console.log(
     `prices poked    : bMTB $${ethers.formatUnits(bmtbPx, 8)} | mUSDC $${ethers.formatUnits(usdcPx, 8)}`
   );
@@ -123,7 +153,7 @@ async function main() {
   // --- 4. Fund the lending pool via fundPool() so poolLiquidity is tracked --
   await (await mUSDC.mint(deployer.address, POOL_LIQUIDITY)).wait();
   await (await mUSDC.approve(c.vault, POOL_LIQUIDITY)).wait();
-  await (await vault.fundPool(POOL_LIQUIDITY)).wait();
+  await send("fundPool", () => vault.fundPool(POOL_LIQUIDITY));
   console.log(`lending pool    : funded ${ethers.formatUnits(POOL_LIQUIDITY, 6)} mUSDC via fundPool()`);
 
   // --- 5. Fund the keeper repay buffer -------------------------------------
@@ -158,17 +188,19 @@ async function main() {
         "   position from the front-end wallet, or set DEPLOYER_PRIVATE_KEY = demoUser."
     );
   } else {
+    // Re-push prices so the borrow sees a fresh last-good price inside maxStaleness.
+    await refreshPrices();
     await (await bMTB.connect(userSigner).approve(c.vault, DEPOSIT_BMTB)).wait();
-    await (await vault.connect(userSigner).deposit(c.bMTB, DEPOSIT_BMTB)).wait();
+    await send("deposit", () => vault.connect(userSigner).deposit(c.bMTB, DEPOSIT_BMTB));
     console.log(`deposit         : ${ethers.formatUnits(DEPOSIT_BMTB, 18)} bMTB deposited`);
 
-    await (await vault.connect(userSigner).borrow(BORROW_MUSDC)).wait();
+    await send("borrow", () => vault.connect(userSigner).borrow(BORROW_MUSDC));
     console.log(`borrow          : ${ethers.formatUnits(BORROW_MUSDC, 6)} mUSDC borrowed`);
   }
 
   // --- 7. Report resulting health factor -----------------------------------
   line();
-  const hf = await riskEngine.getHealthFactor(demoUser);
+  const hf = await retry(() => riskEngine.getHealthFactor(demoUser));
   const hfNum = Number(ethers.formatUnits(hf, 18));
   const collateralUSD =
     (Number(ethers.formatUnits(DEPOSIT_BMTB, 18)) * Number(ethers.formatUnits(BMTB_PRICE, 8)));
