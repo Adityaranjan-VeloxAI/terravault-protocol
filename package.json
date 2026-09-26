@@ -1,0 +1,30 @@
+{
+  "name": "terravault-protocol",
+  "version": "1.0.0",
+  "description": "TerraVault — RWA collateral lending protocol with a manipulation-resistant oracle (circuit breaker) on HashKey Chain.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "clean": "hardhat clean",
+    "deploy": "hardhat run scripts/deploy.ts --network hashkeyTestnet",
+    "deploy:mainnet": "hardhat run scripts/deploy.ts --network hashkeyMainnet",
+    "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
+    "seed": "hardhat run scripts/seed-demo-data.ts --network hashkeyTestnet",
+    "seed:local": "hardhat run scripts/seed-demo-data.ts --network hardhat",
+    "keeper": "ts-node scripts/keeper/guardian-price-pusher.ts",
+    "agent": "ts-node agents/risk-monitor.ts"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2"
+  }
+}
